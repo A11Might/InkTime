@@ -1,76 +1,89 @@
-# InkTime 可视化控制台
+# InkTime · 会讲故事的墨水屏相框
 
-InkTime（[dai-hongtao/InkTime](https://github.com/dai-hongtao/InkTime)）照片分析管线的本地可视化调试台。
-原项目：「可自托管的墨水屏电子相框，用 AI 分析照片库、按值得回忆度打分，并按“历史上的今天”
-自动生成每日最具回忆价值的照片，让沉睡的记忆重新被看见。」
-本控制台负责其中的「看」和「调」：浏览 `photos.db` 里的评分照片，实时预览 Quote/0
-墨水屏（296×152，黑白 1-bit）渲染效果。不带 AI 选片逻辑。
+一个完全运行在自己电脑上的小工具：它会用 AI 读懂你的照片，每天挑出最值得回味的一张，
+配上一句文案，推送到桌上的墨水屏相框；手机碰一碰设备，就能看到那张照片的原图和故事。
 
-![style](https://img.shields.io/badge/%E9%A3%8E%E6%A0%BC-%E7%BA%B8%E5%A2%A8%E5%B7%A5%E7%A8%8B%E9%A3%8E-2a78d6)
+<p align="center">
+  <img src="docs/home.png" width="100%" alt="工作台"/>
+</p>
+<p align="center"><i>工作台：画廊筛选 / 屏上文案即时编辑 / 墨水屏实时预览</i></p>
 
-## 快速开始
+## 三步开始
+
+### 第 1 步：安装（只需一次）
+
+把下面两行命令复制粘贴到「终端」（macOS）或「PowerShell」（Windows）里：
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python3 -m venv .venv && source .venv/bin/activate    # Windows 用户改为：.venv\Scripts\activate
 pip install -r requirements.txt
-python mock/seed_mock.py        # 生成演示数据（30 张程序化场景图 + mock/photos.db）
-python app.py                   # http://127.0.0.1:8788
 ```
 
-## 接真实数据
+### 第 2 步：告诉它照片在哪、用哪个 AI
 
-复制 `config_example.py` 为 `config.py`，指向 analyze_photos.py 的产物：
+复制 `config_example.py` 并改名为 `config.py`，打开填三样东西（都有中文注释）：
+
+1. **照片在哪**：`IMAGE_DIR` 填你照片文件夹的路径，例如 `/Users/张三/Pictures/我的照片`
+2. **结果存哪**：`DB_PATH` 是分析结果的保存文件，放在照片文件夹里就行，命名为 `photos.db`
+   （和上面拼起来就是：`/Users/张三/Pictures/我的照片/photos.db`）
+3. **AI 用哪家**：两种任选，格式都是 OpenAI 兼容的 `/v1/chat/completions`，区别主要在隐私——
+   - **商用 API**：照片会上传到模型服务商的服务器分析。买一份视觉大模型的 key（阿里云/智谱等），
+     填 `api_url`、`api_key`，`model_name` 填带视觉能力的模型名
+   - **自建模型**：照片完全不出你的电脑。装 [LM Studio](https://lmstudio.ai)，下载视觉模型
+     （如 `mlx-community/Qwen3.5-9B-6bit`，约 8GB）并在 Developer 页启动本地服务；`api_url` 填
+     `http://127.0.0.1:1234/v1/chat/completions`，`api_key` 留空。对电脑性能要求较高：
+     作者实测 M2 Pro / 16GB 内存，每张照片（两次调用）约 2 分钟
+
+### 第 3 步：跑起来
+
+```bash
+python3.11 analyze_photos.py    # 分析照片：第一次要等一会儿，中断了再跑会自动接续
+python3.11 app.py               # 打开控制台：http://127.0.0.1:8788
+```
+
+> **小技巧：先拿几张照片试水**
+> 从照片库里挑十来张，拷到一个新文件夹（比如桌面上的 `测试照片`），只分析这一小批：
+>
+> ```bash
+> python3.11 analyze_photos.py ~/Desktop/测试照片          # 只分析这个文件夹
+> python3.11 analyze_photos.py ~/Desktop/测试照片 --limit 5  # 再省一点：只处理前 5 张
+> ```
+>
+> 跑完打开控制台看看效果，满意了再把整个照片库交给它。
+
+打开控制台后：左边是照片画廊，右边是墨水屏预览，点「推送到设备」即可。
+想推哪张点哪张，屏上文案也可以随手改。
+
+### 让墨水屏收到推送
+
+需要一个 [Dot. Quote/0](https://dot.mindreset.tech) 墨水屏，并在 `config.py` 里填上设备凭证（App 里可以查到）：
 
 ```python
-IMAGE_DIR = "/Users/you/Pictures/album"
-DB_PATH = "/Users/you/InkTime/photos.db"
-FONT_PATH = ""        # 留空自动找系统中文字体；推荐霞鹜文心宋体
-
-# 推送到 Quote/0（可选，配好后「推送到设备」按钮生效）
-DOT_API_KEY = ""      # Dot. App → 更多 → API Key → 创建
-DOT_DEVICE_ID = ""    # 设备序列号
-DOT_TASK_KEY = ""     # 可选：多个「图像 API」任务时指定
+DOT_API_KEY = "dot_app_XXXX"    # Dot. App → 更多 → API Key → 创建
+DOT_DEVICE_ID = "设备序列号"
 ```
 
-表结构与 `analyze_photos.py` 的 `photo_scores` 完全同构，零迁移。
+| Quote/0 实机 | 碰一碰手机端 |
+|:---:|:---:|
+| <img src="docs/device_real.jpg" width="480"/> | <img src="docs/tap_mobile.png" width="213"/> |
 
-## 推送到 Quote/0
+*左：Quote/0 实机正在展示推送的照片与画外之意；右：手机 NFC 碰一碰打开的回看页面*
 
-用环境变量配置设备凭证（避免密钥写进文件）：
+## 它能做什么
 
-```bash
-export DOT_API_KEY="dot_app_XXXX"    # Dot. App → 更多 → API Key → 创建（只展示一次）
-export DOT_DEVICE_ID="ABCD1234"      # 设备序列号，App 设备详情里查看
-python app.py
-```
+- **自动挑片**：AI 给每张照片打「回忆分」，每天从「历史上的今天」挑出最值得再看的一张
+- **自动写文案**：为照片配一句 8~20 字的「画外之意」，不走套路、不灌鸡汤
+- **一键推送**：渲染成墨水屏画面推到 Dot. Quote/0，推送历史随时回看
+- **碰一碰回看**：手机 NFC 触碰设备，打开一个页面看原图、文案、拍摄日期和城市
+- **隐私可控**：照片和数据库都存在自己电脑上；选本地模型的话，照片不会经过任何云端
 
-想长期生效就写进 `~/.zshrc`。也可写在 `config.py` 的同名变量里（环境变量优先）。
-设备侧需满足：已接电源、已联网，且已在 App「内容工坊」把「图像 API」内容加入设备**循环**任务。
+## 致谢
 
-## 功能
+- [dai-hongtao/InkTime](https://github.com/dai-hongtao/InkTime) — 项目想法与照片分析思路
+- [Dot.](https://dot.mindreset.tech) — Quote/0 墨水屏设备与 OpenAPI
+- [ZinggJM/GxEPD2](https://github.com/ZinggJM/GxEPD2)、[Pillow](https://python-pillow.org/) — 墨水屏生态与图像处理
+- 城市索引基于 [GeoNames](https://www.geonames.org/)（CC BY 4.0）制作；视觉语言取自 [dejev.app](https://dejev.app/zh-Hans)
 
-- **画廊**：按分类筛选 / 回忆度·美观度·日期排序 / 文案与城市搜索
-- **今日选片**：「历史上的今天」（按 EXIF 月-日匹配）的高分照片 Top 3
-- **墨水屏预览**：右侧 Quote/0 设备拟真框，296×152 1-bit 渲染，切换照片时有墨水屏刷新动画
-- **横竖构图自适应（实机验证）**：照片一律顶格铺满左侧、文字全在右侧白区，不裁主体、文字不压图——横图走「照片 203×152 等比顶满（永不裁剪）+ 右文字条（旁白每行 5 字，地点/日期在右下）」，竖图/方图走「照片 cover 116×152 顶满 + 右文字列（旁白每行 10 字，日期左 · 地点右）」（阈值 `SIDE_TEXT_MAX_ASPECT = 1.3` 可在 render.py 调）
-- **按 iPhone 真实尺寸校准**：mock 数据覆盖 iPhone 全部拍摄档位——后置默认 24MP（5712×4284 / 4284×5712）、12MP（4032×3024 / 3024×4032，前置与长焦同此）、48MP 全开（8064×6048）、16:9 与 1:1 裁切，全部 4:3 系比例
-- **屏上文案即时编辑**：改文案 / 地点 / 边框颜色 / 抖动即刻重渲染
-- **抖动全对齐 Quote/0**：抖动类型（误差扩散 / 有序 / 关闭）× 10 种抖动算法（Floyd-Steinberg、Atkinson、Burkes、Sierra2、Stucki、Jarvis-Judice-Ninke、行/列/二维扩散、阈值）全部本地模拟，预览与设备显示一致
-- **推送到设备**：一键把当前画面推到 Quote/0（官方图像 API）；每次推送生成独立页面（`/s/<id>`：原图 + 屏上效果对照），并自动作为碰一碰链接发给设备，手机 NFC 触碰即可打开；失败时按官方错误码给出中文排查提示
-- **像素级一致**：推送图在本地按 Bayer 8×8 抖动成 1-bit（实机比选结论：小尺寸上比误差扩散干净稳定），以 `ditherType: NONE` 推送，设备侧不再二次处理；预览默认同为有序抖动，所见即所得（其余抖动算法仍可在预览中实验对比）
+## License
 
-## 结构
-
-```
-app.py                 Flask：/api/stats /api/photos /api/thumb /api/render
-render.py              Pillow 渲染器（实机验证版式：照片顶格铺左 → 自动对比度+锐化 → Bayer 1-bit → 右侧文字区）
-config_example.py      配置模板（IMAGE_DIR / DB_PATH / FONT_PATH；推送凭证走环境变量）
-mock/seed_mock.py      演示数据生成（程序化场景图 + 同构 SQLite）
-static/ templates/     前端（无构建步骤，原生 HTML/CSS/JS）
-```
-
-## 设计
-
-视觉语言取自 [dejev.app](https://dejev.app/zh-Hans)：暖纸面分层背景（`#f6f5f2`/`#fcfcfb`）、
-近黑墨字（`#0b0b0b`）、单一蓝强调色（`#2a78d6`）、1px 暖灰描边 + 16px 圆角卡片、
-等宽数字承载数据；深浅色跟随系统。
+MIT
