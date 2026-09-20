@@ -252,12 +252,6 @@ def push_api():
             "message": "未配置设备：请设置环境变量 DOT_API_KEY / DOT_DEVICE_ID 后重启",
         }), 400
 
-    dither_type = str(data.get("ditherType", "DIFFUSION")).upper()
-    dither_kernel = str(data.get("ditherKernel", "FLOYD_STEINBERG")).upper()
-    if dither_type not in DITHER_TYPES:
-        dither_type = "DIFFUSION"
-    if dither_kernel not in DITHER_KERNELS:
-        dither_kernel = "FLOYD_STEINBERG"
     border = 1 if str(data.get("border")) == "1" else 0
 
     img = Image.open(p)
@@ -265,6 +259,7 @@ def push_api():
     date_text = str(data.get("date", ""))[:10]
     place = str(data.get("place", ""))
 
+    # 推送图已在本地按 Bayer 抖动成 1-bit，设备侧不再二次抖动
     png = renderer.render_push_png(img, caption=caption, date_text=date_text, place=place)
 
     pid = uuid.uuid4().hex[:10]
@@ -295,10 +290,9 @@ def push_api():
         "refreshNow": bool(data.get("refreshNow", True)),
         "image": base64.b64encode(png).decode(),
         "border": border,
-        "ditherType": dither_type,
+        # 图像已本地预抖动成 1-bit，设备侧 ditherType 对其恒等，固定 NONE
+        "ditherType": "NONE",
     }
-    if dither_type == "DIFFUSION":
-        payload["ditherKernel"] = dither_kernel
     if DOT_TASK_KEY:
         payload["taskKey"] = DOT_TASK_KEY
     # 碰一碰链接自动指向这次推送的唯一页面（手机 NFC 触碰后打开）

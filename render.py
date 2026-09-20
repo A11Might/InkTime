@@ -1,14 +1,20 @@
-"""296x152 黑白墨水屏渲染器（Quote/0 规格）。
+"""296x152 黑白墨水屏渲染器（Quote/0 规格）版式（实机比选确定）。
 
-按宽高比自适应版式：横图走「通栏照片 + 底部文字条」，竖图/方图走「照片靠左全高 + 右侧文字栏」。
-抖动算法与 Quote/0 图像 API 的 ditherType/ditherKernel 一致，本地模拟保证预览即所得：
-- DIFFUSION（误差扩散）：FLOYD_STEINBERG / ATKINSON / BURKES / SIERRA2 / STUCKI /
-  JARVIS_JUDICE_NINKE / DIFFUSION_ROW / DIFFUSION_COLUMN / DIFFUSION_2D
-- ORDERED（有序抖动）：8x8 Bayer 矩阵
-- NONE：不抖动（预览按 128 阈值模拟 1-bit 屏效果）
+版式（2026-09 在 Quote/0 实机上逐版比选确定）：照片一律顶格铺满左侧、
+文字全部排在右侧白区，不裁主体、文字绝不压图：
+- 横图（宽高比 >= SIDE_TEXT_MAX_ASPECT）：照片等比放进 203x152 顶满左侧
+  （4:3 恰好铺满，其余比例白边补齐，永不裁剪），右文字条 80px：
+  旁白 16px 每行 5 字（至多 4 行），地点 12px、日期 12px 依次排在右下。
+- 竖图/方图：照片 cover 裁剪 116x152 顶满左侧（3:4 几乎零裁剪），
+  右文字列 162px：旁白 16px 每行 10 字（至多 5 行），日期靠左、地点右对齐同一行。
 
-render_photo()   → 1-bit 预览图（含边框模拟）
-render_push_png()→ 未抖动灰度 PNG（推送给设备，由设备按参数抖动、画边框）
+抖动锁定 Bayer 8x8 有序抖动（实机比选结论：小尺寸 1-bit 上比误差扩散干净稳定）。
+文字在灰度画布上即为纯黑（0/255），有序抖动对纯黑纯白是恒等变换，文字永远锐利。
+推送输出 = 本地 Bayer 抖动后的 1-bit 图，设备侧任何 ditherType 都是恒等变换，
+所见即所得。
+
+render_photo()   → 1-bit 预览图（可选边框模拟；dither 参数仅供预览实验）
+render_push_png()→ Bayer 1-bit PNG（推送用，与实机验证效果一致）
 """
 from __future__ import annotations
 
@@ -17,7 +23,7 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 sys.path.insert(0, str(Path(__file__).parent))
 try:
@@ -27,15 +33,27 @@ except ImportError:
 
 CANVAS_W = getattr(config, "CANVAS_W", 296)
 CANVAS_H = getattr(config, "CANVAS_H", 152)
-PHOTO_H = getattr(config, "PHOTO_H", 116)
-TEXT_H = CANVAS_H - PHOTO_H
 
-# 宽高比低于此值的照片（竖图/方图）走「照片靠左 + 右侧文字栏」版式，
-# 避免被横条铺满裁剪裁掉主体。
+# 宽高比低于此值的照片（竖图/方图）走「照片靠左 + 右侧文字栏」版式。
 # iPhone 照片全是 4:3（横 1.333 / 竖 0.75）：阈值取 1.3，
-# 4:3 横图仍走通栏，竖图和方图走侧排。
+# 4:3 横图仍走横图版式，竖图和方图走侧排。
 SIDE_TEXT_MAX_ASPECT = 1.3
-PHOTO_BOX_MAX_W = 140  # 侧排版式照片盒最大宽，超出则轻微裁边
+
+# 横图版式：照片等比放进 203x152 顶满左侧，右文字条 x=208 宽 80（每行 5 字）
+WIDE_PHOTO_W = getattr(config, "WIDE_PHOTO_W", 203)
+WIDE_TEXT_X = getattr(config, "WIDE_TEXT_X", 208)
+WIDE_TEXT_W = CANVAS_W - WIDE_TEXT_X - 8
+WIDE_CAPTION_Y, WIDE_PLACE_Y, WIDE_DATE_Y = 22, 114, 132
+WIDE_MAX_LINES = 4
+
+# 竖图版式：照片 cover 116x152 顶满左侧，右文字列 x=126 宽 162（每行 10 字）
+TALL_PHOTO_W = getattr(config, "TALL_PHOTO_W", 116)
+TALL_TEXT_X = getattr(config, "TALL_TEXT_X", 126)
+TALL_TEXT_W = CANVAS_W - TALL_TEXT_X - 8
+TALL_CAPTION_Y, TALL_META_Y, TALL_LINE_H = 18, 130, 22
+TALL_MAX_LINES = 5
+
+CAPTION_SIZE, META_SIZE, CAPTION_LINE_H = 16, 12, 22
 
 INK = 0
 PAPER = 255
@@ -74,6 +92,7 @@ _FONT_CANDIDATES = [
     getattr(config, "FONT_PATH", "") or "",
     "fonts/LXGWHeartSerifMN.ttf",
     "fonts/LXGWWenKai-Regular.ttf",
+    "/Users/kohath/Library/Fonts/LXGWWenKaiGBScreen.ttf",  # 实机验证所用字体
     "/System/Library/Fonts/Supplemental/Songti.ttc",
     "/System/Library/Fonts/PingFang.ttc",
     "/System/Library/Fonts/STHeiti Light.ttc",
@@ -103,13 +122,39 @@ def _load_font(size: int):
 
 # ---------- 基础工具 ----------
 
+def _enhance(photo: Image.Image) -> Image.Image:
+    """抖动前的对比度增强：黑白屏损失中间调，先拉对比再轻锐化。"""
+    photo = ImageOps.autocontrast(photo, cutoff=1)
+    return photo.filter(ImageFilter.UnsharpMask(radius=1.2, percent=80, threshold=2))
+
+
 def _cover_crop(img: Image.Image, w: int, h: int) -> Image.Image:
+    """铺满裁剪（竖图版式）：放大到完全覆盖后居中裁剪。"""
     img = ImageOps.exif_transpose(img)
     scale = max(w / img.width, h / img.height)
     img = img.resize((round(img.width * scale), round(img.height * scale)), Image.LANCZOS)
     left = (img.width - w) // 2
     top = (img.height - h) // 2
     return img.crop((left, top, left + w, top + h))
+
+
+def _fit_contain(img: Image.Image, w: int, h: int) -> Image.Image:
+    """等比放进 w×h 盒子，白底补边居中——永不裁剪（横图版式）。"""
+    img = ImageOps.exif_transpose(img)
+    scale = min(w / img.width, h / img.height)
+    nw, nh = max(1, round(img.width * scale)), max(1, round(img.height * scale))
+    photo = img.resize((nw, nh), Image.LANCZOS)
+    box = Image.new("RGB", (w, h), (255, 255, 255))
+    box.paste(photo, ((w - nw) // 2, (h - nh) // 2))
+    return box
+
+
+def _photo_gray_cover(img: Image.Image, w: int, h: int) -> Image.Image:
+    return _enhance(_cover_crop(img.convert("RGB"), w, h)).convert("L")
+
+
+def _photo_gray_fit(img: Image.Image, w: int, h: int) -> Image.Image:
+    return _enhance(_fit_contain(img.convert("RGB"), w, h)).convert("L")
 
 
 def _ink_width(draw: ImageDraw.ImageDraw, text: str, font) -> int:
@@ -128,72 +173,98 @@ def _truncate(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> str:
     return text + "…"
 
 
+# 闭合标点不出现在行首（禁则）；必要时允许该行微溢出，吃掉右侧留白
+_CLOSING_PUNCT = "。，！？、；：）》」』…"
+
+
+def _wrap_segment(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> list[str]:
+    lines: list[str] = []
+    line = ""
+    for ch in text:
+        if line and _ink_width(draw, line + ch, font) > max_w:
+            if ch in _CLOSING_PUNCT:
+                lines.append(line + ch)
+                line = ""
+            else:
+                lines.append(line)
+                line = ch
+        else:
+            line += ch
+    if line:
+        lines.append(line)
+    for i in range(1, len(lines)):
+        if lines[i] and lines[i][0] in _CLOSING_PUNCT:
+            lines[i - 1] += lines[i][0]
+            lines[i] = lines[i][1:]
+    return [l for l in lines if l]
+
+
 def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> list[str]:
     lines: list[str] = []
     for raw in text.split("\n"):
-        line = ""
-        for ch in raw:
-            if line and _ink_width(draw, line + ch, font) > max_w:
-                lines.append(line)
-                line = ch
-            else:
-                line += ch
-        lines.append(line)
+        lines.extend(_wrap_segment(draw, raw, font, max_w))
     return lines
 
 
-def _photo_gray(img: Image.Image, w: int, h: int) -> Image.Image:
-    photo = _cover_crop(img.convert("RGB"), w, h)
-    return ImageOps.autocontrast(photo, cutoff=1).convert("L")
+def _limit_lines(draw: ImageDraw.ImageDraw, lines: list[str], font, max_w: int,
+                 max_lines: int) -> list[str]:
+    if len(lines) <= max_lines:
+        return lines
+    lines = lines[:max_lines]
+    last = lines[-1]
+    while last and _ink_width(draw, last + "…", font) > max_w:
+        last = last[:-1]
+    lines[-1] = last + "…"
+    return lines
+
+
+def _draw_caption(draw: ImageDraw.ImageDraw, caption: str, font, x: int, y: int,
+                  max_w: int, max_lines: int) -> None:
+    if not caption:
+        return
+    lines = _limit_lines(draw, _wrap_text(draw, caption, font, max_w), font, max_w, max_lines)
+    for ln in lines:
+        draw.text((x, y), ln, font=font, fill=INK)
+        y += CAPTION_LINE_H
 
 
 # ---------- 灰度合成（未抖动，文字纯黑） ----------
 
 def _compose_wide(img: Image.Image, caption: str, date_text: str, place: str) -> Image.Image:
+    """横图版式：照片 203x152 等比顶满左侧，右文字条 = 旁白 / 地点 / 日期。"""
     canvas = Image.new("L", (CANVAS_W, CANVAS_H), PAPER)
-    canvas.paste(_photo_gray(img, CANVAS_W, PHOTO_H), (0, 0))
+    canvas.paste(_photo_gray_fit(img, WIDE_PHOTO_W, CANVAS_H), (0, 0))
     draw = ImageDraw.Draw(canvas)
-    draw.rectangle([0, PHOTO_H, CANVAS_W, CANVAS_H], fill=PAPER)
-    pad = 8
-    cap_font = _load_font(13)
-    meta_font = _load_font(10)
-    if caption:
-        draw.text((pad, PHOTO_H + 3), _truncate(draw, caption, cap_font, CANVAS_W - pad * 2),
-                  font=cap_font, fill=INK)
-    meta = "  ·  ".join(x for x in (date_text, place) if x)
-    if meta:
-        bbox = draw.textbbox((0, 0), meta, font=meta_font)
-        x = CANVAS_W - pad - bbox[2]  # 按墨迹右缘对齐
-        draw.text((x, CANVAS_H - 13), meta, font=meta_font, fill=INK)
+    cap_font, meta_font = _load_font(CAPTION_SIZE), _load_font(META_SIZE)
+    _draw_caption(draw, caption, cap_font, WIDE_TEXT_X, WIDE_CAPTION_Y,
+                  WIDE_TEXT_W, WIDE_MAX_LINES)
+    if place:
+        draw.text((WIDE_TEXT_X, WIDE_PLACE_Y), _truncate(draw, place, meta_font, WIDE_TEXT_W),
+                  font=meta_font, fill=INK)
+    if date_text:
+        draw.text((WIDE_TEXT_X, WIDE_DATE_Y), date_text, font=meta_font, fill=INK)
     return canvas
 
 
 def _compose_tall(img: Image.Image, caption: str, date_text: str, place: str) -> Image.Image:
+    """竖图版式：照片 cover 116x152 顶满左侧，右文字列 = 旁白 / 日期左 + 地点右。"""
     canvas = Image.new("L", (CANVAS_W, CANVAS_H), PAPER)
-    box_w = min(round(CANVAS_H * img.width / img.height), PHOTO_BOX_MAX_W)
-    canvas.paste(_photo_gray(img, box_w, CANVAS_H), (0, 0))
+    canvas.paste(_photo_gray_cover(img, TALL_PHOTO_W, CANVAS_H), (0, 0))
     draw = ImageDraw.Draw(canvas)
-    x0 = box_w + 10
-    text_w = CANVAS_W - x0 - 8
-    cap_font = _load_font(13)
-    meta_font = _load_font(10)
-    if caption:
-        lines = _wrap_text(draw, caption, cap_font, text_w)
-        max_lines = 5
-        if len(lines) > max_lines:
-            lines = lines[:max_lines]
-            last = lines[-1]
-            while last and _ink_width(draw, last + "…", cap_font) > text_w:
-                last = last[:-1]
-            lines[-1] = last + "…"
-        y = 10
-        for line in lines:
-            draw.text((x0, y), line, font=cap_font, fill=INK)
-            y += 19
-    meta = "  ·  ".join(x for x in (date_text, place) if x)
-    if meta:
-        draw.text((x0, CANVAS_H - 14), _truncate(draw, meta, meta_font, text_w),
-                  font=meta_font, fill=INK)
+    cap_font, meta_font = _load_font(CAPTION_SIZE), _load_font(META_SIZE)
+    _draw_caption(draw, caption, cap_font, TALL_TEXT_X, TALL_CAPTION_Y,
+                  TALL_TEXT_W, TALL_MAX_LINES)
+    if date_text or place:
+        right_edge = TALL_TEXT_X + TALL_TEXT_W
+        if place:
+            avail = TALL_TEXT_W
+            if date_text:
+                avail -= _ink_width(draw, date_text, meta_font) + 12
+            place = _truncate(draw, place, meta_font, avail)
+            bbox = draw.textbbox((0, 0), place, font=meta_font)
+            draw.text((right_edge - bbox[2], TALL_META_Y), place, font=meta_font, fill=INK)
+        if date_text:
+            draw.text((TALL_TEXT_X, TALL_META_Y), date_text, font=meta_font, fill=INK)
     return canvas
 
 
@@ -254,6 +325,12 @@ def _draw_border(bw: Image.Image, border: int) -> Image.Image:
     return bw
 
 
+def _compose_auto(img: Image.Image, caption: str, date_text: str, place: str) -> Image.Image:
+    if img.width / img.height >= SIDE_TEXT_MAX_ASPECT:
+        return _compose_wide(img, caption, date_text, place)
+    return _compose_tall(img, caption, date_text, place)
+
+
 # ---------- 对外接口 ----------
 
 def render_photo(
@@ -261,16 +338,13 @@ def render_photo(
     caption: str = "",
     date_text: str = "",
     place: str = "",
-    dither_type: str = "DIFFUSION",
+    dither_type: str = "ORDERED",
     dither_kernel: str = "FLOYD_STEINBERG",
     border: int = 0,
 ) -> Image.Image:
-    """1-bit 预览图。版式按宽高比自适应；本地模拟设备侧抖动与边框。"""
+    """1-bit 预览图。版式按宽高比自适应；dither 参数仅供预览实验。"""
     img = ImageOps.exif_transpose(image)
-    if img.width / img.height >= SIDE_TEXT_MAX_ASPECT:
-        gray = _compose_wide(img, caption, date_text, place)
-    else:
-        gray = _compose_tall(img, caption, date_text, place)
+    gray = _compose_auto(img, caption, date_text, place)
     bw = _apply_dither(gray, dither_type, dither_kernel)
     return _draw_border(bw.convert("L"), border).convert("1")
 
@@ -281,14 +355,11 @@ def render_push_png(
     date_text: str = "",
     place: str = "",
 ) -> bytes:
-    """推送用灰度 PNG：不本地抖动、不画边框，由设备按 ditherType/border 参数处理。"""
+    """推送用图：Bayer 1-bit（实机验证过的效果）。设备侧任何 ditherType 对 1-bit 图都是恒等变换。"""
     img = ImageOps.exif_transpose(image)
-    if img.width / img.height >= SIDE_TEXT_MAX_ASPECT:
-        gray = _compose_wide(img, caption, date_text, place)
-    else:
-        gray = _compose_tall(img, caption, date_text, place)
+    bw = _dither_ordered(_compose_auto(img, caption, date_text, place))
     out = io.BytesIO()
-    gray.save(out, format="PNG", optimize=True)
+    bw.convert("L").save(out, format="PNG", optimize=True)
     return out.getvalue()
 
 

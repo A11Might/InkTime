@@ -13,7 +13,11 @@ FONT_PATH = ""
 # 渲染画布（Quote/0: 2.66" 296x152, 125 PPI, 黑白）
 CANVAS_W = 296
 CANVAS_H = 152
-PHOTO_H = 116        # 顶部照片区高度，底部 36px 为文字条
+# 版式常量（render.py 用）：照片顶格铺满左侧、文字全在右侧白区、不裁主体
+WIDE_PHOTO_W = 203   # 横图：照片等比放进 203x152 顶满左侧（4:3 恰好铺满）
+WIDE_TEXT_X = 208    # 横图：右文字条起点（宽 80px，旁白每行 5 字）
+TALL_PHOTO_W = 116   # 竖图：照片 cover 裁剪 116x152 顶满左侧
+TALL_TEXT_X = 126    # 竖图：右文字列起点（宽 162px，旁白每行 10 字）
 
 # —— Dot. Quote/0 推送（可选；推荐用环境变量，这里留空兜底）——
 # export DOT_API_KEY=...    # Dot. App → 更多 → API Key → 创建
