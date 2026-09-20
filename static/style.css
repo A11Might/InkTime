@@ -276,9 +276,12 @@ body {
   background: var(--surface-2); border-radius: var(--radius-card); overflow: hidden;
 }
 .tap-photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.tap-meta { width: var(--pw); display: flex; justify-content: center; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--text-secondary); }
+.tap-info { width: var(--pw); display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
+.tap-caption { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.45; }
+.tap-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--text-secondary); }
 @media (max-width: 480px) {
   .tap-main { padding: 14px 14px calc(28px + env(safe-area-inset-bottom)); gap: 16px; }
+  .tap-caption { font-size: 18px; }
 }
 
 /* ---------- footer ---------- */
