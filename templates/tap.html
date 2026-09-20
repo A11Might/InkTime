@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#f6f5f2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)">
+<title>InkTime · 碰一碰</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="tap-body">
+
+<header class="tap-bar">
+  <span class="brand">InkTime<span class="brand-dot">.</span></span>
+  <span class="mono tap-chip">碰一碰</span>
+</header>
+
+<main class="tap-main">
+  {% set pw = 'min(100%, calc(72vh * (' ~ w ~ ' / ' ~ h ~ ')))' %}
+  <figure class="tap-figure" style="--ar: {{ w }} / {{ h }}; --pw: {{ pw }};">
+    <div class="tap-photo">
+      <img src="/img/{{ id }}_orig.jpg" alt="">
+    </div>
+    {% if date or city %}
+    <figcaption class="tap-meta mono">
+      {% if date %}<span>{{ date }}</span>{% endif %}
+      {% if city %}<span>{{ city }}</span>{% endif %}
+    </figcaption>
+    {% endif %}
+  </figure>
+</main>
+
+</body>
+</html>

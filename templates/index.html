@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InkTime · 每日一忆</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="container topbar-inner">
+    <div class="brand">InkTime<span class="brand-dot">.</span></div>
+    <div class="topbar-right">
+      <span class="status-chip mono" id="dbChip">加载中…</span>
+      <a class="nav-link" href="https://github.com/dai-hongtao/InkTime" target="_blank" rel="noopener">原项目 ↗</a>
+    </div>
+  </div>
+</header>
+
+<section class="container masthead">
+  <h1>每日一忆<span class="tick">。</span></h1>
+  <p class="sub">照片库已按值得回忆度打过分，每天从「历史上的今天」里请出最好的一张，让沉睡的记忆重新被看见。</p>
+  <div class="metrics">
+    <div class="metric"><span class="num mono" id="mTotal">–</span><span class="label">已分析照片</span></div>
+    <div class="metric"><span class="num mono" id="mAvg">–</span><span class="label">平均回忆度</span></div>
+    <div class="metric"><span class="num mono" id="mHigh">–</span><span class="label">高分照片 <span class="mono">≥85</span></span></div>
+    <div class="metric"><span class="num mono" id="mToday">–</span><span class="label">今日候选 <span class="mono" id="mTodayDate"></span></span></div>
+  </div>
+</section>
+
+<section class="container picks" id="picksSection" hidden>
+  <div class="section-head">
+    <h2>今日选片</h2>
+    <span class="mono muted">历史上的今天</span>
+  </div>
+  <div class="picks-row" id="picksRow"></div>
+</section>
+
+<main class="container layout">
+  <section class="gallery-col">
+    <div class="toolbar">
+      <div class="chips" id="typeChips"></div>
+      <div class="toolbar-right">
+        <select id="sortSel" class="control">
+          <option value="memory">按回忆度</option>
+          <option value="beauty">按美观度</option>
+          <option value="date">按拍摄日期</option>
+        </select>
+        <input id="searchInput" class="control" type="search" placeholder="搜索文案 / 城市…">
+      </div>
+    </div>
+    <div class="grid" id="grid">
+      <div class="empty-note">加载中…</div>
+    </div>
+  </section>
+
+  <aside class="preview-col">
+    <div class="device">
+      <div class="device-frame">
+        <img id="previewImg" class="screen" alt="墨水屏预览">
+        <div class="screen-flash" id="screenFlash"></div>
+      </div>
+      <div class="device-meta mono">QUOTE/0 · 296×152 · 125 PPI · 1-BIT</div>
+    </div>
+    <div class="panel">
+      <div class="panel-info mono" id="panelInfo">未选择照片</div>
+      <div class="field">
+        <label for="captionInput">屏上文案</label>
+        <input id="captionInput" class="control" maxlength="24" placeholder="8–24 个字的画外之意">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="ditherTypeSel">抖动类型</label>
+          <select id="ditherTypeSel" class="control">
+            <option value="DIFFUSION">误差扩散</option>
+            <option value="ORDERED">有序抖动</option>
+            <option value="NONE">关闭抖动</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="ditherKernelSel">抖动算法</label>
+          <select id="ditherKernelSel" class="control">
+            <option value="FLOYD_STEINBERG">Floyd-Steinberg</option>
+            <option value="ATKINSON">Atkinson</option>
+            <option value="BURKES">Burkes</option>
+            <option value="SIERRA2">Sierra2</option>
+            <option value="STUCKI">Stucki</option>
+            <option value="JARVIS_JUDICE_NINKE">Jarvis-Judice-Ninke</option>
+            <option value="DIFFUSION_ROW">行扩散 Row</option>
+            <option value="DIFFUSION_COLUMN">列扩散 Column</option>
+            <option value="DIFFUSION_2D">二维扩散 2D</option>
+            <option value="THRESHOLD">阈值 Threshold</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="borderSel">屏幕边框</label>
+        <select id="borderSel" class="control">
+          <option value="0">白色</option>
+          <option value="1">黑色</option>
+        </select>
+      </div>
+      <button id="pushBtn" class="push-btn" disabled>推送到设备</button>
+      <div id="pushMsg" class="push-msg" hidden></div>
+      <p class="push-hint">每次推送生成独立碰一碰页面（原图 + 屏上效果），手机 NFC 触碰设备即可打开</p>
+    </div>
+  </aside>
+</main>
+
+<footer class="container footer">
+  <span>数据来自 photos.db，与 analyze_photos.py 同构</span>
+  <span class="mono">InkTime console · MIT</span>
+</footer>
+
+<div id="pushMsg" class="toast" hidden></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

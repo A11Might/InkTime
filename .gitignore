@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 用户本地配置（推送凭证走环境变量 DOT_API_KEY / DOT_DEVICE_ID）
+config.py
+
+# 生成物：可随时用 python mock/seed_mock.py 重建
+mock/photos/
+mock/photos.db
+
+# 推送成图存档
+output/
