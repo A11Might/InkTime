@@ -201,12 +201,21 @@ function bindEvents() {
   });
 
   $("#borderSel").addEventListener("change", () => refreshPreview({ flash: true }));
+  // 误差扩散 → 算法下拉；有序/关闭 → 框内显示固定文案
+  function syncDitherUI() {
+    const type = $("#ditherTypeSel").value;
+    const isDiffusion = type === "DIFFUSION";
+    $("#ditherKernelSel").hidden = isDiffusion === false;
+    const staticBox = $("#kernelStatic");
+    staticBox.hidden = isDiffusion;
+    staticBox.textContent = type === "ORDERED" ? "固定使用 Bayer 8×8" : "无算法";
+  }
   $("#ditherTypeSel").addEventListener("change", (e) => {
-    // 抖动算法只在「误差扩散」下生效
-    $("#ditherKernelSel").disabled = e.target.value !== "DIFFUSION";
+    syncDitherUI();
     refreshPreview({ flash: true });
   });
   $("#ditherKernelSel").addEventListener("change", () => refreshPreview({ flash: true }));
+  syncDitherUI();
   $("#screenFlash").addEventListener("animationend", () =>
     $("#screenFlash").classList.remove("active")
   );

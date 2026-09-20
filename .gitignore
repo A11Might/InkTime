@@ -12,3 +12,10 @@ mock/photos.db
 
 # 推送成图存档
 output/
+
+# analyze_photos.py 运行产物
+filelist.txt
+.filelist_cache.txt
+
+# macOS 系统文件
+.DS_Store

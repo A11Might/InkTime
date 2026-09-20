@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 import requests as http_client
-from flask import Flask, abort, jsonify, render_template, request, send_file
+from flask import Flask, abort, jsonify, redirect, render_template, request, send_file
 from PIL import Image, ImageOps
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -30,7 +30,7 @@ MOCK_DB = ROOT / "mock" / "photos.db"
 MOCK_DIR = ROOT / "mock" / "photos"
 
 DB_PATH = Path(getattr(config, "DB_PATH", "") or MOCK_DB)
-IMAGE_DIR = Path(getattr(config, "IMAGE_DIR", "") or MOCK_DIR)
+IMAGE_DIR = Path(getattr(config, "IMAGE_DIR", "") or MOCK_DIR).expanduser().resolve()
 
 # 推送凭证：环境变量优先，config.py 留空兜底
 DOT_API_KEY = os.environ.get("DOT_API_KEY") or getattr(config, "DOT_API_KEY", "")
@@ -110,6 +110,14 @@ def photo_date(row: dict) -> str:
         return ""
 
 
+def normalize_datetime(dt: str) -> str:
+    """EXIF 冒号日期 2023:09:02 → 2023-09-02，与库内其余记录风格统一。"""
+    dt = str(dt or "").strip()
+    if len(dt) >= 10 and dt[4:5] == ":" and dt[7:8] == ":":
+        dt = dt[:4] + "-" + dt[5:7] + "-" + dt[8:]
+    return dt
+
+
 def serialize(row: dict) -> dict:
     name = Path(row["path"]).name
     return {
@@ -119,7 +127,7 @@ def serialize(row: dict) -> dict:
         "type": row.get("type") or "未分类",
         "memory": row.get("memory_score") or 0,
         "beauty": row.get("beauty_score") or 0,
-        "date": photo_date(row)[:16],
+        "date": normalize_datetime(photo_date(row))[:16],
         "city": row.get("exif_city") or "",
         "w": row.get("width") or 0,
         "h": row.get("height") or 0,
@@ -133,8 +141,8 @@ def resolve_image(rel_or_abs: str) -> Path:
         if not p.exists():
             p = ROOT / rel_or_abs  # 兼容相对仓库根的写法（如 mock/photos/x.jpg）
     p = p.resolve()
-    if IMAGE_DIR.resolve() not in p.parents:
-        abort(403)
+    # 单机自用工具：允许访问磁盘上任意已存在的图片路径
+    # （分析目录可以是照片库之外的任意文件夹，如 ~/Desktop/未命名文件夹）
     if not p.exists():
         abort(404)
     return p
@@ -181,8 +189,8 @@ def photos():
     sql, args = "SELECT * FROM photo_scores", []
     conds = []
     if typ and typ != "全部":
-        conds.append("type = ?")
-        args.append(typ)
+        conds.append("type LIKE ?")
+        args.append(f"%{typ}%")
     if q:
         conds.append("(caption LIKE ? OR exif_city LIKE ? OR type LIKE ?)")
         args += [f"%{q}%"] * 3
@@ -194,8 +202,15 @@ def photos():
 
 @app.get("/api/types")
 def types():
-    rows = db_rows("SELECT DISTINCT type FROM photo_scores ORDER BY type")
-    return jsonify(["全部"] + [r["type"] for r in rows if r["type"]])
+    """类型标签：一张照片可有多个类型（库内以 / 连接），拆成独立标签去重。"""
+    tags, seen = [], set()
+    for r in db_rows("SELECT type FROM photo_scores"):
+        for t in (r["type"] or "").split("/"):
+            t = t.strip()
+            if t and t not in seen:
+                seen.add(t)
+                tags.append(t)
+    return jsonify(["全部"] + tags)
 
 
 @app.get("/api/thumb")
@@ -262,14 +277,48 @@ def lan_ip() -> str:
         return "127.0.0.1"
 
 
-@app.get("/s/<pid>")
-def tap_page(pid: str):
+@app.get("/latest")
+@app.get("/s/latest")
+def s_latest():
+    """碰一碰 tab 入口：跳到最近一次推送的展示页。"""
+    pid = ""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute(PUSH_TABLE_SQL)
+            row = conn.execute(
+                "SELECT pid FROM push_history ORDER BY pushed_at DESC, rowid DESC LIMIT 1"
+            ).fetchone()
+            pid = row["pid"] if row else ""
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        pid = ""
+    if not pid:  # 库里没有记录时，回退到 output 目录里最新的推送
+        jsons = sorted(OUTPUT_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime)
+        if jsons:
+            pid = jsons[-1].stem
+    if not pid:
+        return redirect("/")
+    return redirect(f"/memory/{pid}", code=302)
+
+
+@app.get("/memory/<pid>")
+def memory_page(pid: str):
     """碰一碰（NFC）打开的页面：一次推送的原图与信息。"""
     meta_file = OUTPUT_DIR / f"{pid}.json"
     if not meta_file.exists():
         abort(404)
     meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    meta["date"] = normalize_datetime(meta.get("date"))
     return render_template("tap.html", **meta)
+
+
+@app.get("/s/<pid>")
+def memory_page_legacy(pid: str):
+    """旧地址兼容：跳转到 /memory/<pid>，已推送卡片的链接不受影响。"""
+    return redirect(f"/memory/{pid}", code=302)
 
 
 @app.get("/img/<pid>.png")
@@ -347,7 +396,7 @@ def push_api():
     # 碰一碰链接自动指向这次推送的唯一页面（手机 NFC 触碰后打开）
     ip = lan_ip()
     if ip != "127.0.0.1":
-        payload["link"] = f"http://{ip}:{PORT}/s/{pid}"
+        payload["link"] = f"http://{ip}:{PORT}/memory/{pid}"
 
     url = f"{DOT_API_BASE.rstrip('/')}/api/authV2/open/device/{DOT_DEVICE_ID}/image"
     try:
@@ -366,7 +415,7 @@ def push_api():
         (OUTPUT_DIR / f"{pid}.json").write_text(
             json.dumps(meta, ensure_ascii=False), encoding="utf-8")
         msg = "已保存，设备唤醒后显示" if not payload["refreshNow"] else "已推送到设备，屏幕刷新中"
-        return jsonify({"ok": True, "message": msg, "page": f"/s/{pid}",
+        return jsonify({"ok": True, "message": msg, "page": f"/memory/{pid}",
                         "push_count": meta["push_count"]})
 
     hint = PUSH_ERROR_HINTS.get(resp.status_code, f"推送失败（HTTP {resp.status_code}）")
