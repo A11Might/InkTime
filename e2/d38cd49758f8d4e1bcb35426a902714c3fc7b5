@@ -1,0 +1,16 @@
+static/style.css
+  h_9c2748708bf84b 279-281,284
+templates/tap.html
+  h_9c2748708bf84b 8,24-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e2d38cd49758f8d4e1bcb35426a902714c3fc7b5",
+  "prompts": {},
+  "humans": {
+    "h_9c2748708bf84b": {
+      "author": "huqihang <huqh2@finchina.com>"
+    }
+  }
+}
