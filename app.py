@@ -59,6 +59,46 @@ def db_rows(sql: str, args: tuple = ()) -> list[dict]:
         conn.close()
 
 
+PUSH_TABLE_SQL = """CREATE TABLE IF NOT EXISTS push_history (
+    pid TEXT PRIMARY KEY,
+    photo_path TEXT,
+    caption TEXT,
+    date_text TEXT,
+    place TEXT,
+    pushed_at TEXT
+)"""
+
+
+def record_push(pid: str, photo_path: str, caption: str, date_text: str,
+                place: str, pushed_at: str) -> None:
+    """推送成功后落库：每个 pid 一行，用于「这张照片推过没有/推过几次」。"""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(PUSH_TABLE_SQL)
+        conn.execute(
+            "INSERT INTO push_history VALUES (?, ?, ?, ?, ?, ?)",
+            (pid, photo_path, caption, date_text, place, pushed_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def push_info(photo_path: str) -> dict:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(PUSH_TABLE_SQL)
+        row = conn.execute(
+            "SELECT COUNT(*) AS n, MAX(pushed_at) AS last "
+            "FROM push_history WHERE photo_path = ?",
+            (photo_path,),
+        ).fetchone()
+        return {"count": row["n"], "last": row["last"] or ""}
+    finally:
+        conn.close()
+
+
 def photo_date(row: dict) -> str:
     dt = row.get("exif_datetime")
     if dt:
@@ -192,6 +232,13 @@ def render_api():
     return send_file(io.BytesIO(png), mimetype="image/png", max_age=60)
 
 
+@app.get("/api/pushinfo")
+def pushinfo_api():
+    """某张照片的历史推送记录：次数 + 最近一次时间。"""
+    p = resolve_image(request.args.get("path", ""))
+    return jsonify(push_info(str(p)))
+
+
 # ---------- 推送到 Quote/0 ----------
 
 PUSH_ERROR_HINTS = {
@@ -273,6 +320,7 @@ def push_api():
 
     info = db_rows("SELECT * FROM photo_scores WHERE path = ?", (str(p),))
     info = info[0] if info else {}
+    pushed_at = datetime.now().strftime("%Y-%m-%d %H:%M")
     meta = {
         "id": pid,
         "caption": caption, "place": place, "date": date_text,
@@ -281,7 +329,8 @@ def push_api():
         "memory": info.get("memory_score") or 0,
         "beauty": info.get("beauty_score") or 0,
         "w": orig.width, "h": orig.height,
-        "ts": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "ts": pushed_at,
+        "push_count": push_info(str(p))["count"] + 1,  # 含本次
     }
     (OUTPUT_DIR / f"{pid}.json").write_text(
         json.dumps(meta, ensure_ascii=False), encoding="utf-8")
@@ -312,8 +361,13 @@ def push_api():
         return jsonify({"ok": False, "message": "无法连接 Dot. 服务，请检查网络"}), 502
 
     if resp.status_code == 200:
+        record_push(pid, str(p), caption, date_text, place, pushed_at)
+        meta["push_count"] = push_info(str(p))["count"]
+        (OUTPUT_DIR / f"{pid}.json").write_text(
+            json.dumps(meta, ensure_ascii=False), encoding="utf-8")
         msg = "已保存，设备唤醒后显示" if not payload["refreshNow"] else "已推送到设备，屏幕刷新中"
-        return jsonify({"ok": True, "message": msg, "page": f"/s/{pid}"})
+        return jsonify({"ok": True, "message": msg, "page": f"/s/{pid}",
+                        "push_count": meta["push_count"]})
 
     hint = PUSH_ERROR_HINTS.get(resp.status_code, f"推送失败（HTTP {resp.status_code}）")
     try:

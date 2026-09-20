@@ -121,11 +121,27 @@ function selectPhoto(p, { scroll = false, flash = true } = {}) {
     el.classList.toggle("selected", el.dataset.path === p.path);
   });
   $("#captionInput").value = captionOverrides.get(p.path) ?? p.caption;
-  $("#panelInfo").textContent = `回忆度 ${p.memory} · 美观度 ${p.beauty}`;
+  $("#panelInfo").innerHTML = `回忆度 ${p.memory} · 美观度 ${p.beauty}<span class="push-history mono" id="pushHistory"></span>`;
+  loadPushHistory(p.path);
   $("#pushBtn").disabled = false;
   refreshPreview({ flash });
   if (scroll && window.innerWidth <= 960) {
     $(".preview-col").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
+async function loadPushHistory(path) {
+  const el = $("#pushHistory");
+  if (!el) return;
+  el.textContent = "查询推送记录…";
+  try {
+    const info = await fetch(`/api/pushinfo?path=${encodeURIComponent(path)}`).then((r) => r.json());
+    if (!current || current.path !== path) return;   // 期间已切换照片
+    el.textContent = info.count
+      ? `已推送 ${info.count} 次 · 最近 ${info.last}`
+      : "未推送过";
+  } catch {
+    el.textContent = "";
   }
 }
 
@@ -225,6 +241,7 @@ function bindEvents() {
       msg.classList.toggle("error", !d.ok);
       if (d.ok && d.page) {
         msg.innerHTML = `${esc(d.message)} · <a href="${esc(d.page)}" target="_blank" rel="noopener">碰一碰页面 ↗</a>`;
+        if (current) loadPushHistory(current.path);   // 推送记录即时刷新
       } else {
         msg.textContent = d.message || (d.ok ? "已推送" : "推送失败");
       }
@@ -252,36 +269,4 @@ function bindEvents() {
 })();
 
 /* ---------- 深浅色切换 ---------- */
-(function () {
-  const KEY = "inktime-theme";
-  const root = document.documentElement;
-  const btn = document.getElementById("themeToggle");
-  if (!btn) return;
-  const system = matchMedia("(prefers-color-scheme: dark)");
-
-  const resolved = () => {
-    const stored = localStorage.getItem(KEY);
-    if (stored === "light" || stored === "dark") return stored;
-    return system.matches ? "dark" : "light";   // 未手动选过 → 跟随系统
-  };
-
-  function paint() {
-    const t = resolved();
-    root.dataset.theme = t;
-    btn.dataset.resolved = t;
-    const label = t === "dark" ? "切换到浅色模式" : "切换到深色模式";
-    btn.setAttribute("aria-label", label);
-    btn.title = label;
-  }
-
-  btn.addEventListener("click", () => {
-    const next = resolved() === "dark" ? "light" : "dark";
-    localStorage.setItem(KEY, next);
-    paint();
-  });
-
-  // 未手动选择时跟随系统实时变化
-  system.addEventListener("change", paint);
-
-  paint();
-})();
+/* 已抽到 static/theme.js，主页与碰一碰页共用 */
