@@ -179,10 +179,6 @@ else:
 # 本地推理可保持较高值；云端推理建议降低（减少 token/成本）。
 VLM_MAX_LONG_EDGE = int(getattr(cfg, "VLM_MAX_LONG_EDGE", 2560) or 2560)
 
-# 是否再调用一次 VLM 生成独立的「一句话旁白」（side_caption）。
-# 默认关闭：主 caption 已按 8~24 字短句生成，无需二次调用（本地 16G 机器省一半时间）。
-GENERATE_SIDE_CAPTION = bool(getattr(cfg, "GENERATE_SIDE_CAPTION", False))
-
 # 中文城市数据库位置
 WORLD_CITIES_CSV = Path(str(getattr(cfg, "WORLD_CITIES_CSV", "data/world_cities_zh.csv") or "data/world_cities_zh.csv")).expanduser()
 if not WORLD_CITIES_CSV.is_absolute():
@@ -386,10 +382,10 @@ def generate_side_caption(image_path: Path) -> str | None:
 
         "格式要求：\n"
         "1. 只输出一句中文短句，不要换行，不要引号，不要任何解释。\n"
-        "2. 建议长度 8～24 个汉字，最多不超过 30 个汉字。\n"
+        "2. 建议长度 8～20 个汉字，最多不超过 20 个汉字（Quote/0 屏幕窄，横图每行 5 字）。\n"
         "3. 不要出现“这张照片”“这一刻”“那天”等指代照片本身的词。\n"
     )
-    user_prompt = "请基于这张照片，生成一句符合规则的中文文案。 /no_think"
+    user_prompt = "请基于这张照片，生成一句符合规则的中文文案。"
     try:
         img_b64 = encode_image_to_b64(image_path)
     except Exception:
@@ -416,7 +412,7 @@ def generate_side_caption(image_path: Path) -> str | None:
                 },
             ],
             "temperature": 0.7,
-            "max_tokens": 512,
+            "max_tokens": 64,
             "top_p": 0.9,
             "stream": False,
         }
@@ -950,7 +946,7 @@ def call_vlm(image_path: Path) -> dict:
     system_prompt = (
         "你是一个“个人相册照片评估助手”，擅长理解真实照片的内容，并从回忆价值和美观角度打分。\n"
         "你会收到一张照片（以 base64 形式提供），你的任务是：\n"
-        "1）用一句 8~24 个汉字的中文短句概括照片的“画外之意”（不要描述性罗列画面），\n"
+        "1）用中文详细描述照片内容（80~200 字），\n"
         "2）判断照片的大致类型：人物/孩子/猫咪/家庭/旅行/风景/美食/宠物/日常/文档/杂物/其他，一张照片可以有不止一个类型。\n"
         "3）给出 0~100 的“值得回忆度” memory_score（精确到一位小数），\n"
         "4）给出 0~100 的“美观程度” beauty_score（精确到一位小数），\n"
@@ -973,15 +969,6 @@ def call_vlm(image_path: Path) -> dict:
         "- 旅行意义：异地、地标、旅途情景 → 少许提高评分。\n\n"
         "- 画质：画面不清晰、模糊、有残影、虚焦 → 微微降低评分。\n\n"
 
-        "【思考要求】\n"
-        "思考过程请控制在 50 字以内，一两句结论即可，不要逐步分析，不要罗列草稿。\n\n"
-
-        "【文案（caption）写作要求】\n"
-        "- 只写一句中文，8~24 个汉字，不要换行、引号或任何解释。\n"
-        "- 不要复述画面本身，写“看完画面后心里多出来的一句话”；可以带一点幽默或诗意，避免煽情和鸡汤。\n"
-        "- 避免：世界、时光、岁月、温柔、治愈、刚刚好 等滥词，以及“……里装着整个夏天”“……得像……一样”等套路句式。\n"
-        "- 只基于画面可确定的信息，不要虚构时间、人物关系和事件背景。\n\n"
-
         "【重点照片的处理】\n"
         "如果画面中含有：孩子/猫咪/宠物题材，这些主题更容易产生高回忆价值，请直接以75分为中心，并大幅提高评分”。\n"
 
@@ -996,7 +983,7 @@ def call_vlm(image_path: Path) -> dict:
 
         "请严格只输出 JSON，格式如下：\n"
         "{\n"
-        "  \"caption\": \"8~24 字的中文短句\",\n"
+        "  \"caption\": \"……\",\n"
         "  \"type\": \"人物/家庭/旅行/…… 可以带多个type\",\n"
         "  \"memory_score\": 0.0-100.0 的数字, 精确到 1 位小数\n"
         "  \"beauty_score\": 0.0-100.0 的数字, 精确到 1 位小数\n"
@@ -1006,7 +993,7 @@ def call_vlm(image_path: Path) -> dict:
     )
 
     user_text = (
-        "下面是照片的内容，请结合图像本身完成上述任务。 /no_think\n"
+        "下面是照片的内容，请结合图像本身完成上述任务。\n"
     )
 
     def _build(ch):
@@ -1032,64 +1019,18 @@ def call_vlm(image_path: Path) -> dict:
                 },
             ],
             "temperature": 0.2,
-            "max_tokens": 4000,   # Qwen3.5 思考型模型：给足思考+JSON 的预算
             "stream": False,
         }
         return ch["api_url"], headers, body
 
-    def _extract_json(text: str):
-        """从文本中提取最后一个完整 JSON 对象（容忍 ``` 围栏和思考文本混杂）。"""
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.MULTILINE)
-        try:
-            return json.loads(text)
-        except (json.JSONDecodeError, ValueError):
-            pass
-        depth, start = 0, None
-        for i, ch in enumerate(text):
-            if ch == "{":
-                if depth == 0:
-                    start = i
-                depth += 1
-            elif ch == "}" and depth > 0:
-                depth -= 1
-                if depth == 0 and start is not None:
-                    candidate = text[start:i + 1]
-                    try:
-                        return json.loads(candidate)
-                    except (json.JSONDecodeError, ValueError):
-                        pass
-        raise ValueError("响应中没有可解析的 JSON")
-
-
     def _parse_vlm_response(resp):
-        """解析 VLM 响应；content 为空（全被思考占用）时从思考文本里抢救 JSON。"""
+        """解析 VLM 响应，失败时抛异常以触发渠道切换。"""
         data = resp.json()
-        message = data["choices"][0]["message"]
-        content = (message.get("content") or "").strip()
-        if content:
-            try:
-                return _extract_json(content)
-            except (json.JSONDecodeError, ValueError):
-                pass
-        reasoning = message.get("reasoning_content") or ""
-        if reasoning:
-            return _extract_json(reasoning)
-        raise ValueError("响应中没有可解析的 JSON")
+        content = data["choices"][0]["message"]["content"].strip()
+        obj = json.loads(content)
+        return obj
 
-    result = None
-    last_err: Exception | None = None
-    for attempt in range(3):
-        try:
-            result = _post_with_channel_fallback(_build, timeout=TIMEOUT,
-                                                 response_parser=_parse_vlm_response)
-            break
-        except RuntimeError as e:
-            last_err = e
-            # 思考型模型输出长度随机波动，单次失败重试常能通过；解除冷却立即重试
-            _channel_cooldown_until[:] = [0.0] * len(_channel_cooldown_until)
-            print(f"[RETRY] 第 {attempt + 1} 次调用失败，自动重试：{str(e)[:80]}")
-    if result is None:
-        raise RuntimeError(str(last_err))
+    result = _post_with_channel_fallback(_build, timeout=TIMEOUT, response_parser=_parse_vlm_response)
 
     return result, exif_info
 
@@ -1140,9 +1081,7 @@ def _process_one_photo(path: Path, city_resolver) -> dict | None:
         beauty_score = 0.0
     reason = str(result.get("reason", "")).strip()
 
-    side_caption = (
-        generate_side_caption(path) if GENERATE_SIDE_CAPTION else None
-    )
+    side_caption = generate_side_caption(path)
 
     width = exif_info.get("width")
     height = exif_info.get("height")

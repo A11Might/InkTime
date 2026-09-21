@@ -95,30 +95,30 @@
       <div class="panel-info mono" id="panelInfo">未选择照片</div>
       <div class="field">
         <label for="captionInput">屏上文案</label>
-        <input id="captionInput" class="control" maxlength="24" placeholder="8–24 个字的画外之意">
+        <input id="captionInput" class="control" maxlength="30" placeholder="8–20 个字的画外之意">
       </div>
       <div class="field-row">
         <div class="field">
           <label for="ditherTypeSel">抖动类型</label>
           <select id="ditherTypeSel" class="control">
-            <option value="ORDERED" selected>有序抖动</option>
-            <option value="DIFFUSION">误差扩散</option>
+            <option value="DIFFUSION" selected>误差扩散</option>
+            <option value="ORDERED">有序抖动</option>
             <option value="NONE">关闭抖动</option>
           </select>
         </div>
         <div class="field" id="kernelField">
           <label for="ditherKernelSel">抖动算法</label>
           <select id="ditherKernelSel" class="control">
-            <option value="FLOYD_STEINBERG">Floyd-Steinberg</option>
-            <option value="ATKINSON">Atkinson</option>
-            <option value="BURKES">Burkes</option>
-            <option value="SIERRA2">Sierra2</option>
-            <option value="STUCKI">Stucki</option>
-            <option value="JARVIS_JUDICE_NINKE">Jarvis-Judice-Ninke</option>
-            <option value="DIFFUSION_ROW">行扩散 Row</option>
-            <option value="DIFFUSION_COLUMN">列扩散 Column</option>
-            <option value="DIFFUSION_2D">二维扩散 2D</option>
-            <option value="THRESHOLD">阈值 Threshold</option>
+            <option value="THRESHOLD">THRESHOLD</option>
+            <option value="ATKINSON">ATKINSON</option>
+            <option value="BURKES">BURKES</option>
+            <option value="FLOYD_STEINBERG" selected>FLOYD_STEINBERG</option>
+            <option value="SIERRA2">SIERRA2</option>
+            <option value="STUCKI">STUCKI</option>
+            <option value="JARVIS_JUDICE_NINKE">JARVIS_JUDICE_NINKE</option>
+            <option value="DIFFUSION_ROW">DIFFUSION_ROW</option>
+            <option value="DIFFUSION_COLUMN">DIFFUSION_COLUMN</option>
+            <option value="DIFFUSION_2D">DIFFUSION_2D</option>
           </select>
           <div class="control control-static mono" id="kernelStatic" hidden></div>
         </div>
@@ -143,7 +143,7 @@
 
 <div id="pushMsg" class="toast" hidden></div>
 
-<script src="/static/app.js?v=20260920b"></script>
+<script src="/static/app.js?v=20260921a"></script>
 <script src="/static/theme.js?v=20260920b"></script>
 </body>
 </html>
