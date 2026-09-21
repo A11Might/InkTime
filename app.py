@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import socket
 import sqlite3
 import sys
@@ -32,11 +31,11 @@ MOCK_DIR = ROOT / "mock" / "photos"
 DB_PATH = Path(getattr(config, "DB_PATH", "") or MOCK_DB)
 IMAGE_DIR = Path(getattr(config, "IMAGE_DIR", "") or MOCK_DIR).expanduser().resolve()
 
-# 推送凭证：环境变量优先，config.py 留空兜底
-DOT_API_KEY = os.environ.get("DOT_API_KEY") or getattr(config, "DOT_API_KEY", "")
-DOT_DEVICE_ID = os.environ.get("DOT_DEVICE_ID") or getattr(config, "DOT_DEVICE_ID", "")
-DOT_TASK_KEY = os.environ.get("DOT_TASK_KEY") or getattr(config, "DOT_TASK_KEY", "")
-DOT_API_BASE = os.environ.get("DOT_API_BASE") or getattr(config, "DOT_API_BASE", "https://dot.mindreset.tech")
+# 推送凭证：在 config.py 里配置
+DOT_API_KEY = getattr(config, "DOT_API_KEY", "")
+DOT_DEVICE_ID = getattr(config, "DOT_DEVICE_ID", "")
+DOT_TASK_KEY = getattr(config, "DOT_TASK_KEY", "")
+DOT_API_BASE = getattr(config, "DOT_API_BASE", "https://dot.mindreset.tech")
 
 PORT = 8788
 OUTPUT_DIR = ROOT / "output"  # 每次推送一个 <id>.*：成图 / 预览 / 原图 / 元数据
@@ -123,7 +122,8 @@ def serialize(row: dict) -> dict:
     return {
         "path": row["path"],
         "name": name,
-        "caption": row.get("caption") or "",
+        # 屏上文案：取旁白 side_caption（原版分工：caption 为长描述）；旧记录旁白为空时回落 caption
+        "caption": row.get("side_caption") or row.get("caption") or "",
         "type": row.get("type") or "未分类",
         "memory": row.get("memory_score") or 0,
         "beauty": row.get("beauty_score") or 0,
@@ -192,8 +192,8 @@ def photos():
         conds.append("type LIKE ?")
         args.append(f"%{typ}%")
     if q:
-        conds.append("(caption LIKE ? OR exif_city LIKE ? OR type LIKE ?)")
-        args += [f"%{q}%"] * 3
+        conds.append("(side_caption LIKE ? OR caption LIKE ? OR exif_city LIKE ? OR type LIKE ?)")
+        args += [f"%{q}%"] * 4
     if conds:
         sql += " WHERE " + " AND ".join(conds)
     sql += f" ORDER BY {order} LIMIT 500"
@@ -345,7 +345,7 @@ def push_api():
     if not DOT_API_KEY or not DOT_DEVICE_ID:
         return jsonify({
             "ok": False,
-            "message": "未配置设备：请设置环境变量 DOT_API_KEY / DOT_DEVICE_ID 后重启",
+            "message": "未配置设备：请在 config.py 里填写 DOT_API_KEY / DOT_DEVICE_ID 后重启",
         }), 400
 
     border = 1 if str(data.get("border")) == "1" else 0

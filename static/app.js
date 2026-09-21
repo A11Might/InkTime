@@ -20,7 +20,7 @@ function renderURL(p, { caption, place, ditherType, ditherKernel, border }) {
     caption: caption ?? "",
     place: place ?? "",
     date: p.date || "",
-    ditherType: ditherType || "ORDERED",
+    ditherType: ditherType || "DIFFUSION",
     ditherKernel: ditherKernel || "FLOYD_STEINBERG",
     border: border ?? 0,
   });
@@ -103,14 +103,21 @@ function refreshPreview({ flash = false } = {}) {
     border: $("#borderSel").value,
   };
   const img = $("#previewImg");
+  const idle = $("#screenIdle");
   const url = renderURL(current, opts);
   const flashEl = $("#screenFlash");
   img.onload = () => {
+    idle.hidden = true;
+    img.hidden = false;
     if (flash) {
       flashEl.classList.remove("active");
       void flashEl.offsetWidth; // 重新触发动画
       flashEl.classList.add("active");
     }
+  };
+  img.onerror = () => {   // 图片缺失（如已从磁盘移除）时回落小眼睛占位
+    img.hidden = true;
+    idle.hidden = false;
   };
   img.src = url;
 }

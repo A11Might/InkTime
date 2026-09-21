@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>InkTime · 每日一忆</title>
-<link rel="stylesheet" href="/static/style.css?v=20260920b">
+<link rel="stylesheet" href="/static/style.css?v=20260921f">
 <script>
   /* 首帧前定主题，避免深色用户看到白闪 */
   (function () {
@@ -86,7 +86,15 @@
   <aside class="preview-col">
     <div class="device">
       <div class="device-frame">
-        <img id="previewImg" class="screen" alt="墨水屏预览">
+        <div class="screen screen-idle" id="screenIdle">
+          <svg viewBox="0 0 114 88" aria-hidden="true">
+            <rect x="0" y="0" width="52" height="88" rx="26"/>
+            <rect x="62" y="0" width="52" height="88" rx="26"/>
+            <ellipse cx="14" cy="36" rx="9" ry="21" fill="#fcfcfb"/>
+            <ellipse cx="76" cy="36" rx="9" ry="21" fill="#fcfcfb"/>
+          </svg>
+        </div>
+        <img id="previewImg" class="screen" alt="墨水屏预览" hidden>
         <div class="screen-flash" id="screenFlash"></div>
       </div>
       <div class="device-meta mono">QUOTE/0 · 296×152 · 125 PPI · 1-BIT</div>
@@ -143,7 +151,7 @@
 
 <div id="pushMsg" class="toast" hidden></div>
 
-<script src="/static/app.js?v=20260921a"></script>
+<script src="/static/app.js?v=20260921b"></script>
 <script src="/static/theme.js?v=20260920b"></script>
 </body>
 </html>
