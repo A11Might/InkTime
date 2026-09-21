@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 
-# 用户本地配置（推送凭证走环境变量 DOT_API_KEY / DOT_DEVICE_ID）
+# 用户本地配置（含 VLM / Dot 推送凭证，不进仓库）
 config.py
 
 # 生成物：可随时用 python mock/seed_mock.py 重建
