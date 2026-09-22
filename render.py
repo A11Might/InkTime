@@ -13,7 +13,7 @@
 推送输出 = 本地 Bayer 抖动后的 1-bit 图，设备侧任何 ditherType 都是恒等变换，
 所见即所得。
 
-render_photo()   → 1-bit 预览图（可选边框模拟；dither 参数仅供预览实验）
+render_png()     → 1-bit 预览图（可选边框模拟；dither 参数仅供预览实验）
 render_push_png()→ Bayer 1-bit PNG（推送用，与实机验证效果一致）
 """
 from __future__ import annotations
@@ -333,7 +333,7 @@ def _compose_auto(img: Image.Image, caption: str, date_text: str, place: str) ->
 
 # ---------- 对外接口 ----------
 
-def render_photo(
+def render_png(
     image: Image.Image,
     caption: str = "",
     date_text: str = "",
@@ -341,12 +341,15 @@ def render_photo(
     dither_type: str = "ORDERED",
     dither_kernel: str = "FLOYD_STEINBERG",
     border: int = 0,
-) -> Image.Image:
-    """1-bit 预览图。版式按宽高比自适应；dither 参数仅供预览实验。"""
+) -> bytes:
+    """1-bit 预览图（/api/render 用）。版式按宽高比自适应；dither 参数仅供预览实验。"""
     img = ImageOps.exif_transpose(image)
     gray = _compose_auto(img, caption, date_text, place)
     bw = _apply_dither(gray, dither_type, dither_kernel)
-    return _draw_border(bw.convert("L"), border).convert("1")
+    preview = _draw_border(bw.convert("L"), border).convert("1")
+    out = io.BytesIO()
+    preview.save(out, format="PNG", optimize=True)
+    return out.getvalue()
 
 
 def render_push_png(
@@ -360,10 +363,4 @@ def render_push_png(
     bw = _dither_ordered(_compose_auto(img, caption, date_text, place))
     out = io.BytesIO()
     bw.convert("L").save(out, format="PNG", optimize=True)
-    return out.getvalue()
-
-
-def render_png(image: Image.Image, **kwargs) -> bytes:
-    out = io.BytesIO()
-    render_photo(image, **kwargs).save(out, format="PNG", optimize=True)
     return out.getvalue()

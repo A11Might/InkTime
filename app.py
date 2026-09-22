@@ -5,18 +5,17 @@
 """
 from __future__ import annotations
 
-import base64
 import json
-import socket
+import os
 import sqlite3
 import sys
-import uuid
-from datetime import datetime
+import threading
+import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import requests as http_client
 from flask import Flask, abort, jsonify, redirect, render_template, request, send_file
-from PIL import Image, ImageOps
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent))
 try:
@@ -25,20 +24,19 @@ except ImportError:
     import config_example as config  # type: ignore
 
 ROOT = Path(__file__).parent
-MOCK_DB = ROOT / "mock" / "photos.db"
 MOCK_DIR = ROOT / "mock" / "photos"
 
-DB_PATH = Path(getattr(config, "DB_PATH", "") or MOCK_DB)
+# 推送核心（渲染 + Dot API + 落库）在 dot_push.py，与 daily_push.py 共用
+from dot_push import (  # noqa: E402
+    DB_PATH,
+    OUTPUT_DIR,
+    PORT,
+    PUSH_TABLE_SQL,
+    push_info,
+    push_photo,
+)
+
 IMAGE_DIR = Path(getattr(config, "IMAGE_DIR", "") or MOCK_DIR).expanduser().resolve()
-
-# 推送凭证：在 config.py 里配置
-DOT_API_KEY = getattr(config, "DOT_API_KEY", "")
-DOT_DEVICE_ID = getattr(config, "DOT_DEVICE_ID", "")
-DOT_TASK_KEY = getattr(config, "DOT_TASK_KEY", "")
-DOT_API_BASE = getattr(config, "DOT_API_BASE", "https://dot.mindreset.tech")
-
-PORT = 8788
-OUTPUT_DIR = ROOT / "output"  # 每次推送一个 <id>.*：成图 / 预览 / 原图 / 元数据
 
 DITHER_TYPES = {"DIFFUSION", "ORDERED", "NONE"}
 DITHER_KERNELS = {"THRESHOLD", "ATKINSON", "BURKES", "FLOYD_STEINBERG", "SIERRA2",
@@ -47,6 +45,7 @@ DITHER_KERNELS = {"THRESHOLD", "ATKINSON", "BURKES", "FLOYD_STEINBERG", "SIERRA2
 
 app = Flask(__name__)
 import render as renderer  # noqa: E402  (同目录模块)
+import daily_push as daily  # noqa: E402  (选片逻辑 + 推送历史查询)
 
 
 def db_rows(sql: str, args: tuple = ()) -> list[dict]:
@@ -54,46 +53,6 @@ def db_rows(sql: str, args: tuple = ()) -> list[dict]:
     conn.row_factory = sqlite3.Row
     try:
         return [dict(r) for r in conn.execute(sql, args).fetchall()]
-    finally:
-        conn.close()
-
-
-PUSH_TABLE_SQL = """CREATE TABLE IF NOT EXISTS push_history (
-    pid TEXT PRIMARY KEY,
-    photo_path TEXT,
-    caption TEXT,
-    date_text TEXT,
-    place TEXT,
-    pushed_at TEXT
-)"""
-
-
-def record_push(pid: str, photo_path: str, caption: str, date_text: str,
-                place: str, pushed_at: str) -> None:
-    """推送成功后落库：每个 pid 一行，用于「这张照片推过没有/推过几次」。"""
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        conn.execute(PUSH_TABLE_SQL)
-        conn.execute(
-            "INSERT INTO push_history VALUES (?, ?, ?, ?, ?, ?)",
-            (pid, photo_path, caption, date_text, place, pushed_at),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def push_info(photo_path: str) -> dict:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute(PUSH_TABLE_SQL)
-        row = conn.execute(
-            "SELECT COUNT(*) AS n, MAX(pushed_at) AS last "
-            "FROM push_history WHERE photo_path = ?",
-            (photo_path,),
-        ).fetchone()
-        return {"count": row["n"], "last": row["last"] or ""}
     finally:
         conn.close()
 
@@ -176,6 +135,7 @@ def stats():
         "today": today,
         "db_name": DB_PATH.name,
         "picks": [serialize(r) for r in picks],
+        "auto_push": auto_push_status(),
     })
 
 
@@ -256,45 +216,23 @@ def pushinfo_api():
 
 # ---------- 推送到 Quote/0 ----------
 
-PUSH_ERROR_HINTS = {
-    400: "参数错误：图片超 3MB 或参数无效",
-    403: "权限不足：API Key 无效或不属于该设备",
-    404: "设备不存在，或未把「图像 API」加入循环任务",
-    500: "设备响应失败：请确认设备已接电源并联网",
-}
-
-
-def lan_ip() -> str:
-    """局域网 IP（手机碰一碰打开链接用），取不到就回退本机回环。"""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect(("8.8.8.8", 80))
-            return s.getsockname()[0]
-        finally:
-            s.close()
-    except OSError:
-        return "127.0.0.1"
-
 
 @app.get("/latest")
-@app.get("/s/latest")
 def s_latest():
-    """碰一碰 tab 入口：跳到最近一次推送的展示页。"""
+    """工作台「碰一碰」标签入口：跳到最近一次推送的展示页。"""
     pid = ""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        try:
-            conn.execute(PUSH_TABLE_SQL)
-            row = conn.execute(
-                "SELECT pid FROM push_history ORDER BY pushed_at DESC, rowid DESC LIMIT 1"
-            ).fetchone()
-            pid = row["pid"] if row else ""
-        finally:
-            conn.close()
+        conn.execute(PUSH_TABLE_SQL)
+        row = conn.execute(
+            "SELECT pid FROM push_history ORDER BY pushed_at DESC, rowid DESC LIMIT 1"
+        ).fetchone()
+        pid = row["pid"] if row else ""
     except sqlite3.Error:
         pid = ""
+    finally:
+        conn.close()
     if not pid:  # 库里没有记录时，回退到 output 目录里最新的推送
         jsons = sorted(OUTPUT_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime)
         if jsons:
@@ -313,12 +251,6 @@ def memory_page(pid: str):
     meta = json.loads(meta_file.read_text(encoding="utf-8"))
     meta["date"] = normalize_datetime(meta.get("date"))
     return render_template("tap.html", **meta)
-
-
-@app.get("/s/<pid>")
-def memory_page_legacy(pid: str):
-    """旧地址兼容：跳转到 /memory/<pid>，已推送卡片的链接不受影响。"""
-    return redirect(f"/memory/{pid}", code=302)
 
 
 @app.get("/img/<pid>.png")
@@ -341,94 +273,105 @@ def push_orig(pid: str):
 def push_api():
     data = request.get_json(force=True, silent=True) or {}
     p = resolve_image(data.get("path", ""))
+    r = push_photo(
+        p,
+        caption=str(data.get("caption", "")),
+        date_text=str(data.get("date", ""))[:10],
+        place=str(data.get("place", "")),
+        border=1 if str(data.get("border")) == "1" else 0,
+        refresh_now=bool(data.get("refreshNow", True)),
+    )
+    body = {"ok": r["ok"], "message": r["message"]}
+    if r["ok"]:
+        body["page"] = r["page"]
+        body["push_count"] = r["push_count"]
+    return jsonify(body), r["status"]
 
-    if not DOT_API_KEY or not DOT_DEVICE_ID:
-        return jsonify({
-            "ok": False,
-            "message": "未配置设备：请在 config.py 里填写 DOT_API_KEY / DOT_DEVICE_ID 后重启",
-        }), 400
 
-    border = 1 if str(data.get("border")) == "1" else 0
+# ---------- 服务内每日定时推送（无需 launchd / crontab）----------
 
-    img = Image.open(p)
-    caption = str(data.get("caption", ""))
-    date_text = str(data.get("date", ""))[:10]
-    place = str(data.get("place", ""))
+AUTO_PUSH = bool(getattr(config, "AUTO_PUSH", True))
+PUSH_HOUR = int(getattr(config, "PUSH_HOUR", 8))      # 每天几点推
+PUSH_MINUTE = int(getattr(config, "PUSH_MINUTE", 0))
 
-    # 推送图已在本地按 Bayer 抖动成 1-bit，设备侧不再二次抖动
-    png = renderer.render_push_png(img, caption=caption, date_text=date_text, place=place)
 
-    pid = uuid.uuid4().hex[:10]
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    (OUTPUT_DIR / f"{pid}.png").write_bytes(png)
-
-    orig = ImageOps.exif_transpose(img.convert("RGB"))
-    if max(orig.size) > 2000:
-        orig.thumbnail((2000, 2000), Image.LANCZOS)
-    orig.save(OUTPUT_DIR / f"{pid}_orig.jpg", quality=86)
-
-    info = db_rows("SELECT * FROM photo_scores WHERE path = ?", (str(p),))
-    info = info[0] if info else {}
-    pushed_at = datetime.now().strftime("%Y-%m-%d %H:%M")
-    meta = {
-        "id": pid,
-        "caption": caption, "place": place, "date": date_text,
-        "type": info.get("type") or "未分类",
-        "city": info.get("exif_city") or "",
-        "memory": info.get("memory_score") or 0,
-        "beauty": info.get("beauty_score") or 0,
-        "w": orig.width, "h": orig.height,
-        "ts": pushed_at,
-        "push_count": push_info(str(p))["count"] + 1,  # 含本次
+def auto_push_status() -> dict:
+    """给控制台 /api/stats 看的定时推送状态。"""
+    return {
+        "enabled": AUTO_PUSH,
+        "time": f"{PUSH_HOUR:02d}:{PUSH_MINUTE:02d}",
+        "pushed_today": _pushed_today(date.today()),
     }
-    (OUTPUT_DIR / f"{pid}.json").write_text(
-        json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
-    payload: dict = {
-        "refreshNow": bool(data.get("refreshNow", True)),
-        "image": base64.b64encode(png).decode(),
-        "border": border,
-        # 图像已本地预抖动成 1-bit，设备侧 ditherType 对其恒等，固定 NONE
-        "ditherType": "NONE",
-    }
-    if DOT_TASK_KEY:
-        payload["taskKey"] = DOT_TASK_KEY
-    # 碰一碰链接自动指向这次推送的唯一页面（手机 NFC 触碰后打开）
-    ip = lan_ip()
-    if ip != "127.0.0.1":
-        payload["link"] = f"http://{ip}:{PORT}/memory/{pid}"
 
-    url = f"{DOT_API_BASE.rstrip('/')}/api/authV2/open/device/{DOT_DEVICE_ID}/image"
+def _pushed_today(day: date) -> bool:
+    if not DB_PATH.exists():
+        return False
     try:
-        resp = http_client.post(
-            url,
-            headers={"Authorization": f"Bearer {DOT_API_KEY}"},
-            json=payload,
-            timeout=30,
+        return daily.already_pushed_today(DB_PATH, day)
+    except sqlite3.Error:
+        return False
+
+
+def _compute_next_run() -> datetime:
+    """下一次推送时刻：今天的推送点已过但还没推过就现在补跑；推过或还没到点就排下一个推送点。"""
+    now = datetime.now()
+    target = now.replace(hour=PUSH_HOUR, minute=PUSH_MINUTE, second=0, microsecond=0)
+    if now < target:
+        return target
+    return now if not _pushed_today(now.date()) else target + timedelta(days=1)
+
+
+def _auto_push_once(day: date) -> bool:
+    picks = daily.select(DB_PATH, day)
+    if not picks:
+        print("[daily-push] 挑不出照片，跳过", flush=True)
+        return True  # 不是暂时性故障，不必重试
+    ok = True
+    for photo, why in picks:
+        name = Path(photo["path"]).name
+        extra = "，".join(x for x in (photo["d"].isoformat(), photo["city"]) if x)
+        print(f"[daily-push] 选中 {name}（回忆分 {photo['memory']:.0f}，{extra}）—— {why}", flush=True)
+        r = push_photo(
+            Path(photo["path"]),
+            caption=photo["caption"],
+            date_text=photo["d"].isoformat(),
+            place=photo["city"],
+            refresh_now=False,  # 定时推送不强制翻屏：存进设备，等它自己的唤醒周期刷新
         )
-    except http_client.RequestException:
-        return jsonify({"ok": False, "message": "无法连接 Dot. 服务，请检查网络"}), 502
+        print(f"[daily-push] → {r['message']}", flush=True)
+        ok = ok and r["ok"]
+    return ok
 
-    if resp.status_code == 200:
-        record_push(pid, str(p), caption, date_text, place, pushed_at)
-        meta["push_count"] = push_info(str(p))["count"]
-        (OUTPUT_DIR / f"{pid}.json").write_text(
-            json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-        msg = "已保存，设备唤醒后显示" if not payload["refreshNow"] else "已推送到设备，屏幕刷新中"
-        return jsonify({"ok": True, "message": msg, "page": f"/memory/{pid}",
-                        "push_count": meta["push_count"]})
 
-    hint = PUSH_ERROR_HINTS.get(resp.status_code, f"推送失败（HTTP {resp.status_code}）")
-    try:
-        detail = resp.json().get("message", "")
-    except ValueError:
-        detail = ""
-    message = f"{hint}：{detail}" if detail else hint
-    return jsonify({"ok": False, "message": message}), resp.status_code
+def _auto_push_loop() -> None:
+    next_run = _compute_next_run()
+    print(f"[daily-push] 已启用：每天 {PUSH_HOUR:02d}:{PUSH_MINUTE:02d} 自动推送"
+          f"（下次 {next_run.strftime('%Y-%m-%d %H:%M')}）", flush=True)
+    while True:
+        now = datetime.now()
+        if now >= next_run:
+            if _pushed_today(now.date()):
+                next_run = _compute_next_run()  # 今天已经推过（比如手动推了），排下一个推送点
+            else:
+                try:
+                    ok = _auto_push_once(next_run.date())
+                except Exception as exc:  # 定时推送出错不能拖垮服务
+                    print(f"[daily-push] 出错：{exc}", flush=True)
+                    ok = False
+                # 失败 10 分钟后重试；成功就排下一个推送点
+                next_run = _compute_next_run() if ok else now + timedelta(minutes=10)
+        time.sleep(30)
 
+
+DEBUG_MODE = True  # 控制台改动即时生效；关掉可省一个重载父进程
 
 if __name__ == "__main__":
     if not DB_PATH.exists():
         sys.exit(f"数据库不存在: {DB_PATH}（先跑 python mock/seed_mock.py，或在 config.py 配置 DB_PATH）")
+    # debug 模式下 Flask 会先起一个重载父进程再起真正服务的子进程，
+    # 只在子进程（WERKZEUG_RUN_MAIN）里启动调度线程，避免跑两份推两次
+    if AUTO_PUSH and (os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not DEBUG_MODE):
+        threading.Thread(target=_auto_push_loop, daemon=True).start()
     # 绑定 0.0.0.0：手机碰一碰打开 /s/<id> 页面需要局域网可达
-    app.run(host="0.0.0.0", port=PORT, debug=True)
+    app.run(host="0.0.0.0", port=PORT, debug=DEBUG_MODE)

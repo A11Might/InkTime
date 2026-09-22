@@ -51,6 +51,18 @@ TALL_TEXT_X = 126    # 竖图：右文字列起点（宽 162px，旁白每行 10
 # API Key：Dot. App → 更多 → API Key → 创建；设备序列号在 App 设备详情里查看
 DOT_API_KEY = ""
 DOT_DEVICE_ID = ""
-DOT_TASK_KEY = ""   # 可选：多个「图像 API」任务时指定
+DOT_TASK_KEY = ""   # 可选：多个「图像 API」任务时指定（值从「列出设备任务」接口拿）
+DOT_TASK_ALIAS = "" # 可选：给这个内容起个人看得懂的名字，会显示在 Dot. App 的任务列表里；不填保持原名
 DOT_API_BASE = "https://dot.mindreset.tech"
+
+# —— 每日自动推送（定时器内置在 app.py 服务里；daily_push.py 是选片逻辑 + 手动入口）——
+# 选片：只在「历史上的今天」（月-日相同）里挑回忆分达到该值的照片，优先没推送过的；
+# 今天没有合适的就往前一天天回退，最多一年；再没有就用全库最高分兜底
+MEMORY_THRESHOLD = 70
+# 每天推几张（一块 Quote/0 屏建议 1）
+DAILY_COUNT = 1
+# 控制台服务（app.py）常驻时，每天到点自动选片推送；不想要设 False
+AUTO_PUSH = True
+PUSH_HOUR = 8    # 推送时刻（24 小时制）
+PUSH_MINUTE = 0
 

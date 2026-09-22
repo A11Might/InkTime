@@ -941,7 +941,6 @@ def call_vlm(image_path: Path) -> dict:
         raise RuntimeError(f"读取图片失败：{e}")
 
     exif_info = read_exif(image_path)
-    exif_json = json.dumps(exif_info, ensure_ascii=False, default=str)
 
     system_prompt = (
         "你是一个“个人相册照片评估助手”，擅长理解真实照片的内容，并从回忆价值和美观角度打分。\n"
