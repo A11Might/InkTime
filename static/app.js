@@ -77,7 +77,7 @@ async function loadPhotos() {
   $("#grid").innerHTML = photos
     .map((p) => `
       <article class="card" data-path="${esc(p.path)}" tabindex="0">
-        <div class="thumb"><img loading="lazy" src="${thumbURL(p)}" alt=""></div>
+        <div class="thumb"><img loading="lazy" src="${thumbURL(p)}"${p.w && p.h ? ` style="aspect-ratio:${p.w}/${p.h}"` : ""} alt=""></div>
         <div class="card-body">
           <p class="caption">${esc(p.caption)}</p>
           <div class="card-meta">
