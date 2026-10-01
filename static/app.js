@@ -7,6 +7,17 @@ let photos = [];
 let current = null;
 const captionOverrides = new Map();
 
+/* ---------- 瀑布流：JS 分列（从左到右逐行排序）+ 无限滚动 ---------- */
+const PAGE_SIZE = 60;          // 每页张数，滚动临近底部时自动追加
+const COL_GAP = 16;
+let busy = false;              // 首屏或翻页请求在途
+let exhausted = false;         // 当前筛选下已加载完全部
+let reqSeq = 0;                // 筛选条件变更后丢弃在途的旧响应
+let colEls = [];
+let placedCount = 0;           // 已放入列的卡片数，用于轮询分列
+const cardEls = new Map();     // path → 已渲染的卡片元素（重新分列时复用 DOM）
+let pickPhotos = [];           // 今日选片数据，选中时兜底（对应卡片可能还没滚动加载到）
+
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -39,6 +50,7 @@ async function loadStats() {
 
   const section = $("#picksSection");
   if (s.picks.length) {
+    pickPhotos = s.picks;
     section.hidden = false;
     $("#picksRow").innerHTML = s.picks
       .map(
@@ -66,16 +78,8 @@ async function loadTypes() {
     .join("");
 }
 
-async function loadPhotos() {
-  const q = new URLSearchParams(state);
-  $("#grid").innerHTML = `<div class="empty-note">加载中…</div>`;
-  photos = await fetch(`/api/photos?${q}`).then((r) => r.json());
-  if (!photos.length) {
-    $("#grid").innerHTML = `<div class="empty-note">没有匹配的照片，换个筛选条件试试。</div>`;
-    return;
-  }
-  $("#grid").innerHTML = photos
-    .map((p) => `
+function cardHTML(p) {
+  return `
       <article class="card" data-path="${esc(p.path)}" tabindex="0">
         <div class="thumb"><img loading="lazy" src="${thumbURL(p)}"${p.w && p.h ? ` style="aspect-ratio:${p.w}/${p.h}"` : ""} alt=""></div>
         <div class="card-body">
@@ -85,8 +89,140 @@ async function loadPhotos() {
             <span class="type-chip">${esc(p.type)}</span>
           </div>
         </div>
-      </article>`)
-    .join("");
+      </article>`;
+}
+
+/* 列数与 CSS 时代一致：桌面按 200px 最小列宽自适应（最多 4 列），窄屏固定 2 列 */
+function columnCount() {
+  if (window.innerWidth <= 960) return 2;
+  const fit = Math.floor(($("#grid").clientWidth + COL_GAP) / (200 + COL_GAP));
+  return Math.max(1, Math.min(4, fit));
+}
+
+function layoutColumns() {
+  const grid = $("#grid");
+  grid.innerHTML = "";
+  colEls = Array.from({ length: columnCount() }, () => {
+    const c = document.createElement("div");
+    c.className = "grid-col";
+    grid.appendChild(c);
+    return c;
+  });
+  placedCount = 0;
+}
+
+/* 轮询分列：第 i 张进第 i%n 列。名次严格按行递增（1,2,3 / 4,5,6 / …从左到右），
+   横竖构图是打分后自然混排，长期来看各列高度接近 */
+function placeCard(card) {
+  colEls[placedCount % colEls.length].appendChild(card);
+  placedCount++;
+}
+
+function renderCards(items) {
+  for (const p of items) {
+    const t = document.createElement("template");
+    t.innerHTML = cardHTML(p);
+    const card = t.content.firstElementChild;
+    cardEls.set(p.path, card);
+    placeCard(card);
+  }
+}
+
+/* 窗口宽度跨过列数临界点时，按原顺序重新分列（复用已渲染的 DOM） */
+function relayout() {
+  if (!photos.length || columnCount() === colEls.length) return;
+  layoutColumns();
+  for (const p of photos) {
+    const el = cardEls.get(p.path);
+    if (el) placeCard(el);
+  }
+}
+
+function updateFoot(loaded, total, mode) {
+  const foot = $("#gridFoot");
+  if (mode === "loading") {
+    foot.hidden = false;
+    foot.textContent = total ? `加载中… ${loaded} / ${total}` : "加载中…";
+  } else if (loaded === 0) {
+    foot.hidden = true;
+  } else if (mode === "done") {
+    foot.hidden = false;
+    foot.textContent = total ? `共 ${total} 张 · 已全部加载` : `共 ${loaded} 张`;
+  } else {
+    foot.hidden = false;
+    foot.textContent = total ? `已加载 ${loaded} / ${total} 张` : `已加载 ${loaded} 张`;
+  }
+}
+
+function nearBottom() {
+  const r = $("#gridFoot").getBoundingClientRect();
+  return r.top < window.innerHeight + 1000;
+}
+
+async function fetchPage(offset) {
+  const q = new URLSearchParams({ ...state, limit: PAGE_SIZE, offset });
+  const r = await fetch(`/api/photos?${q}`);
+  return {
+    items: await r.json(),
+    total: Number(r.headers.get("X-Total-Count")) || 0,
+  };
+}
+
+async function loadPhotos() {
+  const seq = ++reqSeq;
+  busy = true;
+  exhausted = false;
+  photos = [];
+  cardEls.clear();
+  layoutColumns();
+  updateFoot(0, 0, "loading");
+  try {
+    const { items, total } = await fetchPage(0);
+    if (seq !== reqSeq) return;
+    photos = items;
+    exhausted = items.length < PAGE_SIZE;
+    if (!photos.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty-note";
+      empty.textContent = "没有匹配的照片，换个筛选条件试试。";
+      $("#grid").appendChild(empty);
+      updateFoot(0, total, "done");
+      return;
+    }
+    layoutColumns();
+    renderCards(photos);
+    updateFoot(photos.length, total, exhausted ? "done" : "idle");
+    if (!current) selectPhoto(photos[0], { flash: false });
+  } finally {
+    if (seq === reqSeq) {
+      busy = false;
+      // 哨兵仍在视口附近就继续补页：IO 只在状态变化时触发，
+      // 快速滚到底/重置后停在短页面时，靠这里把后续页接上
+      if (!exhausted && nearBottom()) loadMore();
+    }
+  }
+}
+
+async function loadMore() {
+  if (busy || exhausted) return;
+  const seq = reqSeq;
+  busy = true;
+  updateFoot(photos.length, 0, "loading");
+  try {
+    const { items, total } = await fetchPage(photos.length);
+    if (seq !== reqSeq) return;
+    photos = photos.concat(items);
+    renderCards(items);
+    exhausted = items.length < PAGE_SIZE;
+    updateFoot(photos.length, total, exhausted ? "done" : "idle");
+  } catch {
+    /* 拉取失败不打断浏览：继续滚动会再次尝试 */
+  } finally {
+    if (seq === reqSeq) {
+      busy = false;
+      if (!exhausted && nearBottom()) loadMore();
+    }
+  }
 }
 
 /* ---------- 墨水屏预览 ---------- */
@@ -195,8 +331,23 @@ function bindEvents() {
   $("#picksRow").addEventListener("click", (e) => {
     const btn = e.target.closest(".pick");
     if (!btn) return;
-    const p = photos.find((x) => x.path === btn.dataset.path);
+    const p = photos.find((x) => x.path === btn.dataset.path)
+      || pickPhotos.find((x) => x.path === btn.dataset.path);
     if (p) selectPhoto(p, { scroll: true });
+  });
+
+  // 无限滚动：底部状态条进入扩展视口就追加下一页
+  const io = new IntersectionObserver(
+    (entries) => { if (entries.some((e) => e.isIntersecting) && nearBottom()) loadMore(); },
+    { rootMargin: "1000px 0px" },
+  );
+  io.observe($("#gridFoot"));
+
+  // 窗口宽度跨过列数临界点时重排
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(relayout, 150);
   });
 
   let captionTimer = null;
@@ -278,10 +429,7 @@ function bindEvents() {
 (async function init() {
   bindEvents();
   await Promise.all([loadStats(), loadTypes()]);
-  await loadPhotos();
-  if (photos.length) {
-    selectPhoto(photos[0], { flash: false });
-  }
+  await loadPhotos();   // 首页加载完自动选中第一名（loadPhotos 内处理）
 })();
 
 /* ---------- 深浅色切换 ---------- */

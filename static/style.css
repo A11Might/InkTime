@@ -181,13 +181,11 @@ select.control {
 }
 #searchInput { width: 200px; }
 
-/* ---------- 画廊（瀑布流，横竖构图按真实比例展示） ---------- */
-.grid { columns: 200px 4; column-gap: 16px; }
+/* ---------- 画廊（瀑布流：JS 分列保证从左到右阅读，无限滚动分页） ---------- */
+.grid { display: flex; gap: 16px; align-items: flex-start; }
+.grid-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
 .card {
-  break-inside: avoid;
-  display: inline-block;   /* 防止多列布局中卡片被拦腰截断（Safari） */
   width: 100%;
-  margin-bottom: 16px;
   background: var(--surface-1); border: 1px solid var(--border-subtle);
   border-radius: var(--radius-card); overflow: hidden; cursor: pointer;
   transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
@@ -211,10 +209,16 @@ select.control {
   background: var(--surface-2); color: var(--text-secondary); white-space: nowrap;
 }
 .empty-note {
-  column-span: all;
+  flex: 1;
   padding: 48px 24px; text-align: center;
   color: var(--text-muted); font-size: 13px;
   border: 1px dashed var(--border-subtle); border-radius: var(--radius-card);
+}
+
+/* 底部状态条：无限滚动的加载进度 / 到底提示，同时充当滚动哨兵 */
+.grid-foot {
+  padding: 14px 0 4px; text-align: center;
+  font-size: 12px; color: var(--text-muted);
 }
 
 /* ---------- 墨水屏预览（参照实机：白色浮雕外壳 + 灰色渐变玻璃缓冲区） ---------- */
@@ -397,8 +401,7 @@ select.control {
   .nav-tabs { margin-left: 10px; gap: 2px; }
   .nav-tab { padding: 5px 10px; font-size: 12.5px; }
   .toolbar-right .control { flex: 1; }
-  .grid { columns: 2; column-gap: 12px; }
-  .card { margin-bottom: 12px; }
+  .grid, .grid-col { gap: 12px; }
   .card .thumb img { max-height: 420px; }
 }
 
