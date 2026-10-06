@@ -27,8 +27,8 @@ const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const fmtDate = (d) => (d || "").slice(0, 10);
-const thumbURL = (p) =>
-  `/api/thumb?path=${encodeURIComponent(p.path)}&v=${p.w}x${p.h}`;
+const thumbURL = (p, size) =>
+  `/api/thumb?path=${encodeURIComponent(p.path)}&v=${p.w}x${p.h}` + (size ? `&size=${size}` : "");
 
 function renderURL(p, { caption, place, ditherType, ditherKernel, border }) {
   const q = new URLSearchParams({
@@ -81,16 +81,19 @@ function renderChips() {
 
 function cardHTML(p) {
   return `
-      <article class="card" data-path="${esc(p.path)}" tabindex="0">
-        <div class="thumb"><img loading="lazy" src="${thumbURL(p)}"${p.w && p.h ? ` style="aspect-ratio:${p.w}/${p.h}"` : ""} alt=""></div>
-        <div class="card-body">
-          <p class="caption">${esc(p.caption)}</p>
-          <div class="card-meta">
-            <span class="meta mono">${fmtDate(p.date) || "无日期"}${p.city ? " · " + esc(p.city) : ""}</span>
-            <span class="type-chip">${esc(p.type)}</span>
+      <div class="slot">
+        <div class="deck" aria-hidden="true"></div>
+        <article class="card" data-path="${esc(p.path)}" tabindex="0">
+          <div class="thumb"><img loading="lazy" src="${thumbURL(p)}"${p.w && p.h ? ` style="aspect-ratio:${p.w}/${p.h}"` : ""} alt=""><span class="stack-badge mono"></span></div>
+          <div class="card-body">
+            <p class="caption">${esc(p.caption)}</p>
+            <div class="card-meta">
+              <span class="meta mono">${fmtDate(p.date) || "无日期"}${p.city ? " · " + esc(p.city) : ""}</span>
+              <span class="type-chip">${esc(p.type)}</span>
+            </div>
           </div>
-        </div>
-      </article>`;
+        </article>
+      </div>`;
 }
 
 /* 列数与 CSS 时代一致：桌面按 200px 最小列宽自适应（最多 4 列），窄屏固定 2 列 */
@@ -119,21 +122,256 @@ function placeCard(card) {
   placedCount++;
 }
 
+/* 同一分钟拍摄（连拍）暂视为一叠；正式的相似识别方式待定，只换 stackKey 即可 */
+let stacks = new Map();       // 分叠 key → { count, badge, card }
+let flowItems = [];           // 实际占了版面的照片（各叠的代表张），重排用
+
+/* ---------- 卡牌堆查看器：点卡片 → 屏幕中间弹出一叠牌（Swiper Cards 式），
+   拖动/←→ 翻牌，单击/回车把当前牌映射到右侧墨水屏预览 ---------- */
+const VIEWER_BEHIND = 2;      // 顶牌后面垫几张
+const VIEWER_FLY_PX = 120;    // 拖动超过这个距离松手 = 飞出翻牌
+let viewerEl = null;          // 弹层 DOM（复用）
+let viewerItems = null;       // 当前这叠牌的全部照片
+let viewerIdx = 0;            // 顶牌序号
+let viewerStack = null;       // 弹的是哪一叠（单张为 null）
+let viewerDrag = null;        // 进行中的拖动
+let viewerFlying = false;     // 飞出动画中（忽略输入）
+let viewerGestureAt = 0;      // 上次手势（拖动/翻页）时刻：其衍生的 click 不当作“点牌外”退出
+
+function viewerCardEl(m, idx) {
+  const el = document.createElement("button");
+  el.className = "cardv";
+  el.dataset.idx = String(idx);
+  el.style.transform = viewerStackTransform(VIEWER_BEHIND);
+  el.innerHTML = `
+    <span class="cardv-inner">
+      <img loading="lazy" draggable="false" src="${thumbURL(m, 1000)}"${m.w && m.h ? ` style="aspect-ratio:${m.w}/${m.h}"` : ""} alt="">
+      <span class="cardv-cap">${esc(m.caption || fmtDate(m.date))}</span>
+      ${viewerStack && m.path === viewerStack.coverPath ? '<span class="cardv-cover mono">封面</span>' : ""}
+    </span>`;
+  return el;
+}
+
+// 垫牌的位置：Swiper cards 式——每层上移 9px、转 2.2°、微缩放
+function viewerStackTransform(o) {
+  return `translateX(-50%) translateY(${-o * 9}px) rotate(${(o * 2.2).toFixed(2)}deg) scale(${(1 - o * 0.035).toFixed(3)})`;
+}
+
+function viewerSync() {
+  const stage = viewerEl.querySelector(".cardv-stage");
+  const len = viewerItems.length;
+  const maxO = Math.min(3, len - 1);   // 可见 0..2 层，第 3 层藏住做缓冲
+  const want = [];
+  for (let o = 0; o <= maxO; o++) want.push((viewerIdx + o) % len);
+  for (const el of [...stage.children]) {
+    const o = (Number(el.dataset.idx) - viewerIdx + len) % len;
+    if (o > maxO && !el.classList.contains("fly")) el.remove();
+  }
+  for (const idx of want) {
+    if (!stage.querySelector(`.cardv[data-idx="${idx}"]`)) {
+      stage.appendChild(viewerCardEl(viewerItems[idx], idx));
+    }
+  }
+  for (const el of stage.children) {
+    if (el.classList.contains("fly")) continue;
+    const o = (Number(el.dataset.idx) - viewerIdx + len) % len;
+    el.style.zIndex = String(10 - o);
+    el.style.opacity = o > VIEWER_BEHIND ? "0" : "1";
+    el.style.transform = viewerStackTransform(o);
+  }
+  const m = viewerItems[viewerIdx];
+  viewerEl.querySelector(".cardv-meta").textContent =
+    `${m.date || "无日期"}${m.city ? " · " + m.city : ""} · 回忆度 ${m.memory} ｜ ${viewerIdx + 1} / ${len}`;
+}
+
+function viewerFly(dir) {
+  // 循环牌堆：无论往左还是往右翻，顶牌都绕到整叠最后面、下一张顶上来，首尾循环。
+  // dir 只决定顶牌飞出动画顺着哪个方向滑（跟着拖动方向 / 按键走）
+  const len = viewerItems.length;
+  if (viewerFlying || len < 2) return false;
+  viewerFlying = true;
+  viewerGestureAt = Date.now();
+  const stage = viewerEl.querySelector(".cardv-stage");
+  const top = stage.querySelector(`.cardv[data-idx="${viewerIdx}"]`);
+  viewerIdx = (viewerIdx + 1) % len;
+  const newO = (Number(top.dataset.idx) - viewerIdx + len) % len;   // 原顶牌的新深度（= 最后面）
+  if (newO <= VIEWER_BEHIND) {
+    viewerFlying = false;
+    viewerSync();                                // 小叠：顶牌直接滑进牌堆最后面
+  } else {
+    // 大叠：顶牌顺着拖动方向滑出、z 压到牌堆后面塞进去，淡出落进隐藏缓冲层
+    const side = dir === 1 ? "-" : "";
+    top.classList.add("fly");
+    top.style.zIndex = "1";
+    top.style.transform = `translateX(calc(-50% + ${side}230px)) translateY(-27px) rotate(${side}9deg) scale(0.895)`;
+    top.style.opacity = "0";
+    setTimeout(() => {
+      const o = (Number(top.dataset.idx) - viewerIdx + len) % len;
+      if (o <= 3) {
+        top.classList.remove("fly");
+        top.style.zIndex = String(10 - o);
+        top.style.transform = viewerStackTransform(o);
+        top.style.opacity = "0";
+      } else {
+        top.remove();
+      }
+      viewerFlying = false;
+    }, 300);
+    viewerSync();                                // 其余牌前进；这张会从牌堆底部绕回来
+  }
+  return true;
+}
+
+function openViewer(items, stack = null) {
+  if (!viewerEl) {
+    viewerEl = document.createElement("div");
+    viewerEl.className = "cardv-modal";
+    viewerEl.innerHTML = `
+      <div class="cardv-stage"></div>
+      <div class="cardv-info">
+        <span class="cardv-meta mono"></span>
+        <span class="cardv-hint mono">拖动 / ← → 翻牌 · 单击选中 · Esc 关闭</span>
+      </div>`;
+    const stage = viewerEl.querySelector(".cardv-stage");
+
+    stage.addEventListener("pointerdown", (e) => {
+      if (viewerFlying) return;
+      const top = stage.querySelector(`.cardv[data-idx="${viewerIdx}"]`);
+      if (!top || e.target.closest(".cardv") !== top) return;   // 只有顶牌可拖
+      viewerDrag = { sx: e.clientX, sy: e.clientY, dx: 0, dy: 0, el: top };
+      top.style.transition = "none";   // 拖动跟手，不带过渡
+      stage.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+    stage.addEventListener("pointermove", (e) => {
+      if (!viewerDrag) return;
+      const d = viewerDrag;
+      d.dx = e.clientX - d.sx;
+      d.dy = e.clientY - d.sy;
+      d.el.style.transform = `translateX(calc(-50% + ${d.dx}px)) translateY(${(d.dy * 0.35).toFixed(1)}px) rotate(${(d.dx * 0.055).toFixed(2)}deg)`;
+      // 拖动时下一张垫牌随进度顶上来（两个方向翻都是前进，进度都按横向位移算）
+      const p = Math.min(Math.abs(d.dx) / VIEWER_FLY_PX, 1);
+      for (const el of stage.children) {
+        const o = Number(el.dataset.idx) - viewerIdx;
+        if (o <= 0 || el.classList.contains("fly")) continue;
+        el.style.transform = viewerStackTransform(Math.max(o - p, 0));
+      }
+    });
+    const endDrag = (e) => {
+      if (!viewerDrag) return;
+      const { dx, dy, el } = viewerDrag;
+      viewerGestureAt = Date.now();   // 拖动衍生的 click（被捕获到 stage）不当作“点牌外”
+      viewerDrag = null;
+      el.style.transition = "";
+      if (Math.abs(dx) < 6 && Math.abs(dy) < 24) {
+        confirmViewer();                                    // 原地松手 = 单击选中（竖拖不算）
+      } else if (Math.abs(dx) < VIEWER_FLY_PX || !viewerFly(dx < 0 ? 1 : -1)) {
+        viewerSync();                                       // 不够阈值或到头了，弹回
+      }
+    };
+    stage.addEventListener("pointerup", endDrag);
+    stage.addEventListener("pointercancel", endDrag);
+    viewerEl.addEventListener("click", (e) => {
+      // 点照片以外的任何地方（遮罩/牌面上下左右空白/信息栏）都退出预览；
+      // 拖动/翻页会衍生落在牌外的 click（指针捕获到 stage），350ms 内不当作退出
+      if (!e.target.closest(".cardv") && Date.now() - viewerGestureAt > 350) closeViewer();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (!viewerEl || viewerEl.hidden) return;
+      if (e.key === "ArrowRight") { viewerFly(1); e.preventDefault(); }
+      else if (e.key === "ArrowLeft") { viewerFly(-1); e.preventDefault(); }
+      else if (e.key === "Enter") { e.preventDefault(); confirmViewer(); }
+      else if (e.key === "Escape") closeViewer();
+    });
+    document.body.appendChild(viewerEl);
+  }
+  viewerStack = stack;
+  viewerItems = items;
+  // 有封面的叠从封面那张开起
+  let start = 0;
+  if (stack) {
+    const ci = items.findIndex((x) => x.path === stack.coverPath);
+    if (ci > 0) start = ci;
+  }
+  viewerIdx = start;
+  viewerFlying = false;
+  viewerEl.querySelector(".cardv-stage").innerHTML = "";
+  viewerSync();
+  viewerEl.hidden = false;
+  document.body.style.overflow = "hidden";   // 弹层开着时锁住后面页面的滚动
+}
+
+function confirmViewer() {
+  const m = viewerItems?.[viewerIdx];
+  if (m && viewerStack && viewerStack.count > 1) setCover(viewerStack, m);   // 挑中谁，谁当这叠的封面
+  closeViewer();
+  if (m) selectPhoto(m);
+}
+
+/* 选中的成员成为这叠的封面：画廊卡片立即换成它，推送它 */
+function setCover(stack, m) {
+  const old = stack.repPhoto;
+  if (old && old.path === m.path) return;
+  stack.coverPath = m.path;
+  stack.repPhoto = m;
+  const card = stack.card;
+  const img = card.querySelector(".thumb img");
+  img.src = thumbURL(m);
+  if (m.w && m.h) img.style.aspectRatio = `${m.w}/${m.h}`;
+  card.querySelector(".caption").textContent = m.caption;
+  card.querySelector(".card-meta .meta").textContent =
+    `${fmtDate(m.date) || "无日期"}${m.city ? " · " + m.city : ""}`;
+  card.querySelector(".type-chip").textContent = m.type;
+  card.dataset.path = m.path;
+  const fi = flowItems.indexOf(old);
+  if (fi !== -1) flowItems[fi] = m;
+  if (old && cardEls.get(old.path) === stack.slot) {
+    cardEls.delete(old.path);
+    cardEls.set(m.path, stack.slot);
+  }
+}
+
+function closeViewer() {
+  if (viewerEl) viewerEl.hidden = true;
+  document.body.style.overflow = "";   // 解锁页面滚动
+  viewerItems = null;
+  viewerStack = null;
+  viewerDrag = null;
+}
+
 function renderCards(items) {
   for (const p of items) {
+    const key = p.date || "";
+    const hit = key && stacks.get(key);
+    if (hit) {
+      hit.count += 1;
+      hit.members.push(p);
+      hit.badge.textContent = `×${hit.count}`;
+      hit.card.classList.add("stacked");
+      hit.slot.classList.add("has-stack");
+      continue;
+    }
     const t = document.createElement("template");
     t.innerHTML = cardHTML(p);
-    const card = t.content.firstElementChild;
-    cardEls.set(p.path, card);
-    placeCard(card);
+    const slot = t.content.firstElementChild;
+    const card = slot.querySelector(".card");
+    cardEls.set(p.path, slot);
+    if (key) {
+      stacks.set(key, {
+        count: 1, badge: slot.querySelector(".stack-badge"),
+        card, slot, members: [p], coverPath: p.path, repPhoto: p,
+      });
+    }
+    flowItems.push(p);
+    placeCard(slot);
   }
 }
 
 /* 窗口宽度跨过列数临界点时，按原顺序重新分列（复用已渲染的 DOM） */
 function relayout() {
-  if (!photos.length || columnCount() === colEls.length) return;
+  if (!flowItems.length || columnCount() === colEls.length) return;
   layoutColumns();
-  for (const p of photos) {
+  for (const p of flowItems) {
     const el = cardEls.get(p.path);
     if (el) placeCard(el);
   }
@@ -181,6 +419,8 @@ async function loadPhotos() {
   exhausted = false;
   photos = [];
   cardEls.clear();
+  stacks = new Map();
+  flowItems = [];
   layoutColumns();
   updateFoot(0, 0, "loading");
   try {
@@ -296,6 +536,9 @@ async function loadPushHistory(path) {
   }
 }
 
+/* ---------- 叠的交互：点卡片弹卡牌堆（见 openViewer） ---------- */
+
+
 /* ---------- 事件 ---------- */
 
 function bindEvents() {
@@ -331,27 +574,35 @@ function bindEvents() {
     }, 300);
   });
 
+  // 点卡片：叠 → 弹出这叠的卡牌堆；单张 → 同样弹出（只有一张，单击即选中）
+  const activateCard = (card) => {
+    const p = photos.find((x) => x.path === card.dataset.path);
+    if (!p) return;
+    const stack = p.date && stacks.get(p.date);
+    if (stack && stack.count > 1) openViewer(stack.members, stack);
+    else openViewer([p]);
+  };
   $("#grid").addEventListener("click", (e) => {
     const card = e.target.closest(".card");
-    if (!card) return;
-    const p = photos.find((x) => x.path === card.dataset.path);
-    if (p) selectPhoto(p, { scroll: true });
+    if (card) activateCard(card);
   });
   $("#grid").addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
     const card = e.target.closest(".card");
     if (!card) return;
     e.preventDefault();
-    const p = photos.find((x) => x.path === card.dataset.path);
-    if (p) selectPhoto(p, { scroll: true });
+    activateCard(card);
   });
 
-  // 无限滚动：底部状态条进入扩展视口就追加下一页
+  // 无限滚动：IO 为主（页面可见时零开销），500ms 轮询兜底——
+  // webview 被遮挡/节流时 IO 不派发回调，轮询保证滚动到附近总能续页
+  const maybeLoadMore = () => { if (!busy && !exhausted && nearBottom()) loadMore(); };
   const io = new IntersectionObserver(
-    (entries) => { if (entries.some((e) => e.isIntersecting) && nearBottom()) loadMore(); },
+    (entries) => { if (entries.some((e) => e.isIntersecting)) maybeLoadMore(); },
     { rootMargin: "1000px 0px" },
   );
   io.observe($("#gridFoot"));
+  setInterval(maybeLoadMore, 500);
 
   // 窗口宽度跨过列数临界点时重排
   let resizeTimer = null;

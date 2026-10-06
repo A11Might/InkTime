@@ -204,11 +204,13 @@ def types():
 @app.get("/api/thumb")
 def thumb():
     p = resolve_image(request.args.get("path", ""))
+    # size：长边像素，画廊小卡用默认 560；手牌/大图浏览传大值避免拉伸模糊
+    size = min(max(request.args.get("size", 560, type=int) or 560, 200), 1600)
     img = Image.open(p)
-    img.thumbnail((560, 560))
+    img.thumbnail((size, size))
     import io
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, "JPEG", quality=84)
+    img.convert("RGB").save(buf, "JPEG", quality=88)
     buf.seek(0)
     return send_file(buf, mimetype="image/jpeg", max_age=3600)
 

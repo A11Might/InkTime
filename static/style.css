@@ -206,6 +206,73 @@ select.control {
   font-size: 12px; color: var(--text-muted);
 }
 
+/* ---------- 连拍/相似照片叠放（打牌式一叠） ---------- */
+.slot { position: relative; }
+.deck { position: absolute; inset: 0; z-index: 0; pointer-events: none; display: none; }
+.slot.has-stack .deck { display: block; }
+.deck::before, .deck::after {
+  content: ""; position: absolute; inset: 0;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+}
+.deck::before { transform: rotate(1.9deg) translate(3px, -2px); }
+.deck::after { transform: rotate(-1.5deg) translate(-3px, -3px); }
+.slot .card { position: relative; z-index: 1; }
+.stack-badge {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  display: none; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  background: rgba(11, 11, 11, 0.55); color: #fff;
+}
+.card.stacked .stack-badge { display: block; }
+
+/* ---------- 卡牌堆查看器（Swiper Cards 式）：点卡片弹出，拖动/←→ 翻牌 ---------- */
+.cardv-modal {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(11, 11, 11, 0.55);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 22px; padding: 24px;
+}
+.cardv-stage {
+  position: relative; width: min(820px, 92vw); height: 420px;
+  touch-action: none;   /* 拖牌时不触发页面滚动 */
+}
+.cardv {
+  position: absolute; left: 50%; bottom: 46px;
+  width: min(320px, 72vw); padding: 0; border: none; background: none; cursor: pointer;
+  transform-origin: 50% 100%;
+  transition: transform 0.28s ease, opacity 0.28s ease;
+  will-change: transform;
+}
+.cardv.fly { transition: transform 0.3s ease-out, opacity 0.3s ease-out; }
+.cardv-inner {
+  position: relative;
+  display: block;
+  border-radius: 16px; overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  box-shadow: 0 14px 34px rgba(11, 11, 11, 0.32);
+}
+/* 被选为封面的那张，弹层里挂角标 */
+.cardv-cover {
+  position: absolute; top: 10px; right: 10px; z-index: 2;
+  font-size: 11px; padding: 2px 9px; border-radius: 999px;
+  background: rgba(11, 11, 11, 0.55); color: #fff;
+}
+.cardv img {
+  display: block; width: 100%; max-height: 330px; object-fit: cover;
+  -webkit-user-drag: none; user-select: none;
+}
+.cardv-cap {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; padding: 9px 12px 10px;
+  font-size: 12.5px; line-height: 1.45; text-align: left;
+  color: var(--text-secondary);
+}
+.cardv-info { display: flex; flex-direction: column; gap: 5px; text-align: center; }
+.cardv-meta { font-size: 12.5px; color: #f2f1ec; }
+.cardv-hint { font-size: 11px; color: #b9b7ad; }
+
 /* ---------- 墨水屏预览（参照实机：白色浮雕外壳 + 灰色渐变玻璃缓冲区） ---------- */
 .device {
   background: linear-gradient(180deg, #fdfdfc 0%, #f4f3f0 78%, #eeede9 100%);
