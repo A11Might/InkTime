@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import sys
 import threading
@@ -114,44 +115,63 @@ def index():
 
 @app.get("/api/stats")
 def stats():
-    today = datetime.now().strftime("%m-%d")
     agg = db_rows(
         """SELECT COUNT(*) AS total,
                   COALESCE(AVG(memory_score), 0) AS avg_memory,
                   COALESCE(SUM(memory_score >= 85), 0) AS high_count
            FROM photo_scores"""
     )[0]
-    picks = db_rows(
-        """SELECT *, strftime('%m-%d', exif_datetime) AS md
-           FROM photo_scores
-           WHERE md = ?
-           ORDER BY memory_score DESC LIMIT 3""",
-        (today,),
-    )
+    # 今日选片落在哪一天：与每日推送同一套回退逻辑（今天没达标照片就往前找）
+    pool, _ = daily.load_pool(DB_PATH)
+    pushed = daily.load_pushed(DB_PATH)
+    resolved = daily.resolve_day(datetime.now().date(), pool, pushed)
+    day_iso = resolved.isoformat() if resolved else ""
+    day_count = 0
+    if resolved:
+        day_count = db_rows(
+            f"SELECT COUNT(*) AS c FROM photo_scores WHERE SUBSTR({DATE10},6,5) = ?",
+            (resolved.strftime("%m-%d"),),
+        )[0]["c"]
     return jsonify({
         "total": agg["total"],
         "avg_memory": round(agg["avg_memory"]),
         "high_count": agg["high_count"],
-        "today": today,
+        "today": day_iso,
+        "today_count": day_count,
+        "today_is_today": bool(resolved) and resolved == datetime.now().date(),
         "db_name": DB_PATH.name,
-        "picks": [serialize(r) for r in picks],
         "auto_push": auto_push_status(),
     })
 
 
+# 有效拍摄日期（前 10 位归一为 YYYY-MM-DD）：exif_datetime 列优先，空了退 exif_json，
+# 与卡片上显示的日期、daily_push 的取日期口径一致
+DATE10 = ("REPLACE(SUBSTR(COALESCE(NULLIF(TRIM(exif_datetime),''),"
+          "COALESCE(json_extract(exif_json,'$.datetime'),'')),1,10),':','-')")
+DATE_MD = re.compile(r"\d{2}-\d{2}$")
+
+
 @app.get("/api/photos")
 def photos():
-    typ = request.args.get("type", "")
     sort = request.args.get("sort", "memory")
     q = request.args.get("q", "").strip()
+    types = [t for t in request.args.get("types", "").split(",") if t]
+    md = request.args.get("md", "").strip()
     limit = request.args.get("limit", type=int)
     offset = max(request.args.get("offset", 0, type=int), 0)
     order = {"memory": "memory_score DESC", "beauty": "beauty_score DESC",
              "date": "exif_datetime DESC"}.get(sort, "memory_score DESC")
+    if md and not DATE_MD.fullmatch(md):
+        abort(400)
     conds, args = [], []
-    if typ and typ != "全部":
-        conds.append("type LIKE ?")
-        args.append(f"%{typ}%")
+    if types:
+        # 一张照片的类型可多个（库内以 / 连接），任一命中即算；多选标签取并集
+        conds.append("(" + " OR ".join(["type LIKE ?"] * len(types)) + ")")
+        args += [f"%{t}%" for t in types]
+    if md:
+        # 跨年匹配月-日：今日选片筛「历史上的今天」用
+        conds.append(f"SUBSTR({DATE10},6,5) = ?")
+        args.append(md)
     if q:
         conds.append("(side_caption LIKE ? OR caption LIKE ? OR exif_city LIKE ? OR type LIKE ?)")
         args += [f"%{q}%"] * 4

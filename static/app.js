@@ -2,10 +2,16 @@
 "use strict";
 
 const $ = (s) => document.querySelector(s);
-const state = { type: "全部", sort: "memory", q: "" };
+const state = { sort: "memory", q: "", types: [], day: true };
 let photos = [];
 let current = null;
 const captionOverrides = new Map();
+
+/* ---------- 筛选：今日选片（与每日推送同一回退逻辑）+ 类型多选 ---------- */
+let typeList = [];            // /api/types 返回的全部标签
+let resolvedDay = "";         // 今日选片解析出的那天（YYYY-MM-DD）
+let todayIsToday = false;     // 落点就是今天（未发生回退）
+let todayCount = 0;           // 落点当天的照片总数
 
 /* ---------- 瀑布流：JS 分列（从左到右逐行排序）+ 无限滚动 ---------- */
 const PAGE_SIZE = 60;          // 每页张数，滚动临近底部时自动追加
@@ -16,7 +22,6 @@ let reqSeq = 0;                // 筛选条件变更后丢弃在途的旧响应
 let colEls = [];
 let placedCount = 0;           // 已放入列的卡片数，用于轮询分列
 const cardEls = new Map();     // path → 已渲染的卡片元素（重新分列时复用 DOM）
-let pickPhotos = [];           // 今日选片数据，选中时兜底（对应卡片可能还没滚动加载到）
 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -45,37 +50,33 @@ async function loadStats() {
   $("#mTotal").textContent = s.total;
   $("#mAvg").textContent = s.avg_memory;
   $("#mHigh").textContent = s.high_count;
-  $("#mToday").textContent = s.picks.length;
+  $("#mToday").textContent = s.today_count;
   $("#mTodayDate").textContent = s.today;
-
-  const section = $("#picksSection");
-  if (s.picks.length) {
-    pickPhotos = s.picks;
-    section.hidden = false;
-    $("#picksRow").innerHTML = s.picks
-      .map(
-        (p, i) => `
-      <button class="pick" data-path="${esc(p.path)}">
-        <span class="thumb"><img loading="lazy" src="${thumbURL(p)}" alt=""></span>
-        <span class="pick-body">
-          <span class="pick-top"><span class="rank mono">#${i + 1}</span></span>
-          <span class="caption">${esc(p.caption)}</span>
-          <span class="meta mono">${fmtDate(p.date)}${p.city ? " · " + esc(p.city) : ""}</span>
-        </span>
-      </button>`
-      )
-      .join("");
-  }
+  resolvedDay = s.today || "";
+  todayIsToday = !!s.today_is_today;
+  todayCount = s.today_count || 0;
+  renderChips();
 }
 
 async function loadTypes() {
-  const types = await fetch("/api/types").then((r) => r.json());
-  $("#typeChips").innerHTML = types
-    .map(
-      (t) =>
-        `<button class="chip-btn${t === state.type ? " active" : ""}" data-type="${esc(t)}">${esc(t)}</button>`
-    )
-    .join("");
+  typeList = await fetch("/api/types").then((r) => r.json());
+  renderChips();
+}
+
+/* 「全部」= 清空所有筛选（点它回全库，此时才点亮）；「今日选片」开关默认开；
+   类型多选 chips。今日选片紧随全部之后 */
+function renderChips() {
+  if (!typeList.length) return;
+  const allBtn = `<button class="chip-btn${!state.day && !state.types.length ? " active" : ""}" data-type="全部" title="清空所有筛选，看全部照片">全部</button>`;
+  const dayBtn = resolvedDay
+    ? `<button class="chip-btn chip-day${state.day ? " active" : ""}" data-chip="day"
+        title="${todayIsToday ? "只看历史上的今天" : "今天没达标照片，已按推送逻辑回退到这一天"}">今日选片${todayIsToday ? "" : " · " + resolvedDay.slice(5)} · ${todayCount}</button>`
+    : "";
+  const typeBtns = typeList.filter((t) => t !== "全部").map((t) => {
+    const active = state.types.includes(t);
+    return `<button class="chip-btn${active ? " active" : ""}" data-type="${esc(t)}">${esc(t)}</button>`;
+  });
+  $("#typeChips").innerHTML = allBtn + dayBtn + typeBtns.join("");
 }
 
 function cardHTML(p) {
@@ -85,7 +86,7 @@ function cardHTML(p) {
         <div class="card-body">
           <p class="caption">${esc(p.caption)}</p>
           <div class="card-meta">
-            <span class="meta mono">${fmtDate(p.date)}${p.city ? " · " + esc(p.city) : ""}</span>
+            <span class="meta mono">${fmtDate(p.date) || "无日期"}${p.city ? " · " + esc(p.city) : ""}</span>
             <span class="type-chip">${esc(p.type)}</span>
           </div>
         </div>
@@ -160,7 +161,13 @@ function nearBottom() {
 }
 
 async function fetchPage(offset) {
-  const q = new URLSearchParams({ ...state, limit: PAGE_SIZE, offset });
+  const params = { sort: state.sort };
+  if (state.q) params.q = state.q;
+  if (state.types.length) params.types = state.types.join(",");
+  if (state.day && resolvedDay) {
+    params.md = resolvedDay.slice(5);   // 跨年匹配月-日（历史上的今天）
+  }
+  const q = new URLSearchParams({ ...params, limit: PAGE_SIZE, offset });
   const r = await fetch(`/api/photos?${q}`);
   return {
     items: await r.json(),
@@ -182,6 +189,7 @@ async function loadPhotos() {
     photos = items;
     exhausted = items.length < PAGE_SIZE;
     if (!photos.length) {
+      $("#grid").innerHTML = "";   // 撤掉空列，让提示独占整行
       const empty = document.createElement("div");
       empty.className = "empty-note";
       empty.textContent = "没有匹配的照片，换个筛选条件试试。";
@@ -294,8 +302,18 @@ function bindEvents() {
   $("#typeChips").addEventListener("click", (e) => {
     const btn = e.target.closest(".chip-btn");
     if (!btn) return;
-    state.type = btn.dataset.type;
-    loadTypes();
+    if (btn.dataset.chip === "day") {
+      state.day = !state.day;   // 开关：点一次筛当天，再点一次回到全部
+    } else if (btn.dataset.type === "全部") {
+      state.types = [];         // 全部 = 清空所有筛选，回全库
+      state.day = false;
+    } else {
+      const t = btn.dataset.type;
+      state.types = state.types.includes(t)
+        ? state.types.filter((x) => x !== t)
+        : state.types.concat(t);
+    }
+    renderChips();
     loadPhotos();
   });
 
@@ -325,14 +343,6 @@ function bindEvents() {
     if (!card) return;
     e.preventDefault();
     const p = photos.find((x) => x.path === card.dataset.path);
-    if (p) selectPhoto(p, { scroll: true });
-  });
-
-  $("#picksRow").addEventListener("click", (e) => {
-    const btn = e.target.closest(".pick");
-    if (!btn) return;
-    const p = photos.find((x) => x.path === btn.dataset.path)
-      || pickPhotos.find((x) => x.path === btn.dataset.path);
     if (p) selectPhoto(p, { scroll: true });
   });
 

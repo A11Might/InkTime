@@ -106,26 +106,37 @@ def pick_one(cands: list[dict], pushed: dict[str, str]) -> tuple[dict, str]:
     return min(cands, key=lambda p: (pushed.get(p["path"], ""), p["path"])), "都推过，挑最久没推的"
 
 
+def resolve_day(target: date, pool: list[dict], pushed: dict[str, str]) -> date | None:
+    """今日选片落在哪一天：今天有没推送过的达标照片就是今天，否则往前一天天
+    回退（最多一年）；都推过了退而求其次找最近有达标照片的日子。找不到 None。
+
+    pick() 用它选照片，app.py 也用它解析「今日选片」筛选器落在哪一天。
+    """
+    for offset in range(0, 366):
+        d = target - timedelta(days=offset)
+        if any(p["md"] == d.strftime("%m-%d")
+               and p["memory"] >= MEMORY_THRESHOLD and p["path"] not in pushed
+               for p in pool):
+            return d
+    for offset in range(0, 366):
+        d = target - timedelta(days=offset)
+        if any(p["md"] == d.strftime("%m-%d") and p["memory"] >= MEMORY_THRESHOLD
+               for p in pool):
+            return d
+    return None
+
+
 def pick(target: date, pool: list[dict], pushed: dict[str, str]) -> tuple[dict | None, str]:
     """选片主逻辑，返回 (照片, 选择原因)；一张都没有返回 (None, 原因)。"""
-    # 1) 历史上的今天（含回退）：先找「还有没推送过的达标照片」的日子，照片少也能天天换新
-    for offset in range(0, 366):
-        d = target - timedelta(days=offset)
-        fresh = [p for p in pool if p["md"] == d.strftime("%m-%d")
-                 and p["memory"] >= MEMORY_THRESHOLD and p["path"] not in pushed]
-        if fresh:
-            when = "历史上的今天" if offset == 0 else f"历史上的今天（回退 {offset} 天）"
-            return random.choice(fresh), f"{when}，没推送过的里随机挑"
-    # 2) 达标的全推过了：回退找最近的一个达标日子，挑最久没推的那张
-    for offset in range(0, 366):
-        d = target - timedelta(days=offset)
-        cands = [p for p in pool if p["md"] == d.strftime("%m-%d")
+    day = resolve_day(target, pool, pushed)
+    if day is not None:
+        offset = (target - day).days
+        when = "历史上的今天" if offset == 0 else f"历史上的今天（回退 {offset} 天）"
+        cands = [p for p in pool if p["md"] == day.strftime("%m-%d")
                  and p["memory"] >= MEMORY_THRESHOLD]
-        if cands:
-            photo, how = pick_one(cands, pushed)
-            when = "历史上的今天" if offset == 0 else f"历史上的今天（回退 {offset} 天）"
-            return photo, f"{when}，{how}"
-    # 3) 兜底：全库最高分（还达不到阈值就放宽阈值）
+        photo, how = pick_one(cands, pushed)
+        return photo, f"{when}，{how}"
+    # 兜底：全库最高分（还达不到阈值就放宽阈值）
     fallback = [p for p in pool if p["memory"] >= MEMORY_THRESHOLD] or pool
     if not fallback:
         return None, "全库没有带拍摄日期的照片"

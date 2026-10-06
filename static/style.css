@@ -128,27 +128,12 @@ a.brand { color: var(--text-primary); text-decoration: none; }
 .metric .num { display: block; font-size: 28px; font-weight: 600; letter-spacing: -0.02em; }
 .metric .label { display: block; margin-top: 2px; font-size: 12px; color: var(--text-muted); }
 
-/* ---------- 今日选片 ---------- */
-.picks { margin-top: 44px; }
-.section-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; }
-.section-head h2 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
-.section-head .mono { font-size: 12px; }
-.picks-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-.pick {
-  display: flex; gap: 14px; padding: 12px; cursor: pointer; text-align: left;
-  background: var(--surface-1); border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-card); font: inherit; color: inherit;
-  transition: border-color 0.15s ease, transform 0.15s ease;
+/* ---------- 今日选片开关（与每日推送同一落点） ---------- */
+.chip-btn.chip-day { border-color: var(--accent); color: var(--accent-ink); }
+.chip-btn.chip-day:hover { border-color: var(--accent-ink); color: var(--accent-ink); }
+.chip-btn.chip-day.active {
+  background: var(--accent); border-color: var(--accent); color: #fff;
 }
-.pick:hover { border-color: var(--border-strong); transform: translateY(-2px); }
-.pick.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.pick .thumb { width: 96px; height: 72px; flex: none; border-radius: var(--radius-md); overflow: hidden; background: var(--surface-2); }
-.pick .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.pick-body { min-width: 0; display: flex; flex-direction: column; }
-.pick-top { display: flex; align-items: center; gap: 8px; }
-.rank { font-size: 11px; color: var(--accent-ink); background: var(--accent-wash); border-radius: 999px; padding: 1px 8px; width: fit-content; }
-.pick .caption { margin: 6px 0 0; font-size: 13px; line-height: 1.45; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.pick .meta { margin-top: auto; font-size: 11px; color: var(--text-muted); }
 
 /* ---------- 布局 ---------- */
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 32px; align-items: start; margin-top: 44px; }
@@ -393,7 +378,6 @@ select.control {
   .preview-col { position: static; order: -1; }
   .device { max-width: 480px; margin: 0 auto; }
   .panel { max-width: 480px; margin: 16px auto 0; }
-  .picks-row { grid-template-columns: 1fr; }
   .masthead { padding-top: 32px; }
   .metrics { gap: 24px; }
   #searchInput { width: 100%; }
