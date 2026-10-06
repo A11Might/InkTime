@@ -123,7 +123,7 @@ function placeCard(card) {
 }
 
 /* 同一分钟拍摄（连拍）暂视为一叠；正式的相似识别方式待定，只换 stackKey 即可 */
-let stacks = new Map();       // 分叠 key → { count, badge, card }
+let stacks = new Map();       // 分叠 key → { members, badge, card, slot, coverPath, repPhoto }
 let flowItems = [];           // 实际占了版面的照片（各叠的代表张），重排用
 
 /* ---------- 卡牌堆查看器：点卡片 → 屏幕中间弹出一叠牌（Swiper Cards 式），
@@ -141,8 +141,7 @@ let viewerGestureAt = 0;      // 上次手势（拖动/翻页）时刻：其衍�
 function viewerCardEl(m, idx) {
   const el = document.createElement("button");
   el.className = "cardv";
-  el.dataset.idx = String(idx);
-  el.style.transform = viewerStackTransform(VIEWER_BEHIND);
+  el.dataset.idx = String(idx);   // 位置由 viewerSync 统一摆（追加同帧即定位，不会闪）
   el.innerHTML = `
     <span class="cardv-inner">
       <img loading="lazy" draggable="false" src="${thumbURL(m, 1000)}"${m.w && m.h ? ` style="aspect-ratio:${m.w}/${m.h}"` : ""} alt="">
@@ -303,7 +302,7 @@ function openViewer(items, stack = null) {
 
 function confirmViewer() {
   const m = viewerItems?.[viewerIdx];
-  if (m && viewerStack && viewerStack.count > 1) setCover(viewerStack, m);   // 挑中谁，谁当这叠的封面
+  if (m && viewerStack && viewerStack.members.length > 1) setCover(viewerStack, m);   // 挑中谁，谁当这叠的封面
   closeViewer();
   if (m) selectPhoto(m);
 }
@@ -344,9 +343,8 @@ function renderCards(items) {
     const key = p.date || "";
     const hit = key && stacks.get(key);
     if (hit) {
-      hit.count += 1;
       hit.members.push(p);
-      hit.badge.textContent = `×${hit.count}`;
+      hit.badge.textContent = `×${hit.members.length}`;
       hit.card.classList.add("stacked");
       hit.slot.classList.add("has-stack");
       continue;
@@ -358,8 +356,8 @@ function renderCards(items) {
     cardEls.set(p.path, slot);
     if (key) {
       stacks.set(key, {
-        count: 1, badge: slot.querySelector(".stack-badge"),
-        card, slot, members: [p], coverPath: p.path, repPhoto: p,
+        members: [p], badge: slot.querySelector(".stack-badge"),
+        card, slot, coverPath: p.path, repPhoto: p,
       });
     }
     flowItems.push(p);
@@ -434,7 +432,6 @@ async function loadPhotos() {
       empty.className = "empty-note";
       empty.textContent = "没有匹配的照片，换个筛选条件试试。";
       $("#grid").appendChild(empty);
-      updateFoot(0, total, "done");
       return;
     }
     layoutColumns();
@@ -536,9 +533,6 @@ async function loadPushHistory(path) {
   }
 }
 
-/* ---------- 叠的交互：点卡片弹卡牌堆（见 openViewer） ---------- */
-
-
 /* ---------- 事件 ---------- */
 
 function bindEvents() {
@@ -579,7 +573,7 @@ function bindEvents() {
     const p = photos.find((x) => x.path === card.dataset.path);
     if (!p) return;
     const stack = p.date && stacks.get(p.date);
-    if (stack && stack.count > 1) openViewer(stack.members, stack);
+    if (stack && stack.members.length > 1) openViewer(stack.members, stack);
     else openViewer([p]);
   };
   $("#grid").addEventListener("click", (e) => {

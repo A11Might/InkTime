@@ -157,7 +157,7 @@ def photos():
     q = request.args.get("q", "").strip()
     types = [t for t in request.args.get("types", "").split(",") if t]
     md = request.args.get("md", "").strip()
-    limit = request.args.get("limit", type=int)
+    limit = request.args.get("limit", 500, type=int)   # 不传就一页给 500（前端无限滚动始终传 60）
     offset = max(request.args.get("offset", 0, type=int), 0)
     order = {"memory": "memory_score DESC", "beauty": "beauty_score DESC",
              "date": "exif_datetime DESC"}.get(sort, "memory_score DESC")
@@ -176,16 +176,13 @@ def photos():
         conds.append("(side_caption LIKE ? OR caption LIKE ? OR exif_city LIKE ? OR type LIKE ?)")
         args += [f"%{q}%"] * 4
     where = (" WHERE " + " AND ".join(conds)) if conds else ""
-    if limit:
-        # 无限滚动分页：按页取，响应头带过滤后的总数供前端显示进度
-        total = db_rows(f"SELECT COUNT(*) AS c FROM photo_scores{where}", tuple(args))[0]["c"]
-        rows = db_rows(f"SELECT * FROM photo_scores{where} ORDER BY {order} LIMIT ? OFFSET ?",
-                       tuple(args + [limit, offset]))
-        resp = jsonify([serialize(r) for r in rows])
-        resp.headers["X-Total-Count"] = total
-        return resp
-    rows = db_rows(f"SELECT * FROM photo_scores{where} ORDER BY {order} LIMIT 500", tuple(args))
-    return jsonify([serialize(r) for r in rows])
+    # 无限滚动分页：响应头带过滤后的总数供前端显示进度
+    total = db_rows(f"SELECT COUNT(*) AS c FROM photo_scores{where}", tuple(args))[0]["c"]
+    rows = db_rows(f"SELECT * FROM photo_scores{where} ORDER BY {order} LIMIT ? OFFSET ?",
+                   tuple(args + [limit, offset]))
+    resp = jsonify([serialize(r) for r in rows])
+    resp.headers["X-Total-Count"] = total
+    return resp
 
 
 @app.get("/api/types")
