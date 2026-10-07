@@ -420,12 +420,17 @@ async function fetchPage(offset) {
 }
 
 /* ---------- 筛选状态 ↔ URL：刷新或把链接发给别人都保持当前筛选 ----------
-   all=1 看全部（今日选片关）｜tag=标签（逗号分隔）｜sort=排序｜text=搜索文字。
-   默认（今日选片开）不带参数，URL 保持干净。 */
+   tag= 当前点亮的 chips（今日选片/全部/类型标签，逗号分隔；缺省 = 默认今日选片）
+   text= 搜索文字 ｜ sort= 排序。「今日选片」就是一个 tag，与类型标签可组合 */
+const TAG_TODAY = "今日选片";
+const TAG_ALL = "全部";
+
 function syncUrl() {
-  const p = new URLSearchParams();
-  if (!state.day) p.set("all", "1");
-  if (state.types.length) p.set("tag", state.types.join(","));
+  const tags = [];
+  if (state.day) tags.push(TAG_TODAY);
+  tags.push(...state.types);
+  if (!tags.length) tags.push(TAG_ALL);
+  const p = new URLSearchParams({ tag: tags.join(",") });
   if (state.sort !== "memory") p.set("sort", state.sort);
   if (state.q) p.set("text", state.q);
   const qs = p.toString();
@@ -436,11 +441,18 @@ function stateFromUrl() {
   const p = new URLSearchParams(location.search);
   const sort = p.get("sort");
   if (sort && ["memory", "beauty", "date"].includes(sort)) state.sort = sort;
-  const tag = p.get("tag");
-  if (tag) state.types = tag.split(",").filter(Boolean);
   const text = p.get("text");
   if (text) state.q = text;
-  if (p.get("all") === "1") state.day = false;
+  const tag = p.get("tag");
+  if (tag === null) return;                       // 无参数 = 默认今日选片
+  const tags = tag.split(",").filter(Boolean);
+  if (tags.includes(TAG_ALL)) {                   // 全部是排他的：清掉其他筛选
+    state.day = false;
+    state.types = [];
+    return;
+  }
+  state.day = tags.includes(TAG_TODAY);
+  state.types = tags.filter((t) => t !== TAG_TODAY);
 }
 
 async function loadPhotos() {
