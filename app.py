@@ -91,6 +91,7 @@ def serialize(row: dict) -> dict:
         "city": row.get("exif_city") or "",
         "w": row.get("width") or 0,
         "h": row.get("height") or 0,
+        "stack": row.get("stack_id"),   # 相似分叠 id（analyze_photos 的 dHash+时间聚类），单张为 None
     }
 
 
@@ -393,9 +394,26 @@ def _auto_push_loop() -> None:
 
 DEBUG_MODE = True  # 控制台改动即时生效；关掉可省一个重载父进程
 
+def _ensure_stacks_bg() -> None:
+    """首次启动（或换库）时在后台把相似分叠建好；建过就跳过，不挡浏览。"""
+    try:
+        import analyze_photos
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            if analyze_photos.stacks_built(conn):
+                return
+            print("[stacks] 首次运行，后台计算相似分叠（dHash 指纹）……", flush=True)
+            analyze_photos.rebuild_stacks(conn, log=lambda m: print(f"[stacks] {m}", flush=True))
+        finally:
+            conn.close()
+    except Exception as exc:   # 分叠失败不影响画廊，只是没有叠
+        print(f"[stacks] 构建失败（不影响浏览）：{exc}", flush=True)
+
+
 if __name__ == "__main__":
     if not DB_PATH.exists():
         sys.exit(f"数据库不存在: {DB_PATH}（先跑 python mock/seed_mock.py，或在 config.py 配置 DB_PATH）")
+    threading.Thread(target=_ensure_stacks_bg, daemon=True).start()
     # debug 模式下 Flask 会先起一个重载父进程再起真正服务的子进程，
     # 只在子进程（WERKZEUG_RUN_MAIN）里启动调度线程，避免跑两份推两次
     if AUTO_PUSH and (os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not DEBUG_MODE):

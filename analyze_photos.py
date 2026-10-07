@@ -8,6 +8,7 @@ import sqlite3
 import os
 import subprocess
 import time
+from datetime import datetime
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
@@ -360,6 +361,129 @@ def ensure_table(conn: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         pass
     conn.commit()
+
+
+# =======================
+# 相似照片分叠：dHash 感知哈希 + 时间邻近链式聚类
+#
+# 纯时间窗会把同分钟里不相干的两张误并；纯哈希在「同场景换姿势」(距离约 10~25)
+# 与「不同场景」(约 22~35) 之间分不干净。两者取交集才并叠：按拍摄时间排序后，
+# 新照片与当前叠最近几张里任一张指纹距离 ≤ STACK_HASH_MAX、且与叠尾时间差
+# ≤ STACK_GAP_MIN 分钟，才并入；链式比较可扛住连拍中偶尔糊掉的坏帧。
+# =======================
+STACK_GAP_MIN = int(getattr(cfg, "STACK_GAP_MIN", 3))     # 相邻两张最大间隔（分钟）
+STACK_HASH_MAX = int(getattr(cfg, "STACK_HASH_MAX", 30))  # dHash 汉明距离阈值（64 位）
+
+
+def compute_dhash(path: Path, size: int = 8) -> int | None:
+    """dHash：缩到 (size+1)×size 灰度，横向相邻像素比较拼成 64 位指纹。"""
+    try:
+        img = Image.open(path)
+        img = ImageOps.exif_transpose(img)   # 按 EXIF 方向转正，横竖翻转的同场景才能对上
+        img = img.convert("L").resize((size + 1, size), Image.LANCZOS)
+        b = img.tobytes()
+        w = size + 1
+        bits = 0
+        for r in range(size):
+            for c in range(size):
+                bits = (bits << 1) | (1 if b[r * w + c] > b[r * w + c + 1] else 0)
+        return bits
+    except Exception:
+        return None
+
+
+_DT_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y:%m:%d %H:%M:%S",
+               "%Y-%m-%d %H:%M", "%Y:%m:%d %H:%M", "%Y-%m-%d", "%Y:%m:%d")
+
+
+def _parse_dt(s) -> "datetime | None":
+    """库里的 exif_datetime 有 - 与 : 两种日期分隔的写法，逐格式尝试解析。"""
+    s = str(s or "").strip()
+    for f in _DT_FORMATS:
+        try:
+            return datetime.strptime(s, f)
+        except ValueError:
+            continue
+    return None
+
+
+def ensure_stack_columns(conn: sqlite3.Connection) -> None:
+    cur = conn.cursor()
+    for col in ("dhash TEXT", "stack_id INTEGER"):
+        try:
+            cur.execute(f"ALTER TABLE photo_scores ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
+    cur.execute("CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)")
+    conn.commit()
+
+
+def stacks_built(conn: sqlite3.Connection) -> bool:
+    ensure_stack_columns(conn)
+    return conn.execute("SELECT 1 FROM app_meta WHERE key = 'stacks'").fetchone() is not None
+
+
+def rebuild_stacks(conn: sqlite3.Connection, log=print) -> int:
+    """全量重算分叠：补缺失 dhash → 按时间排序 → 链式聚类 → 写 stack_id。
+    单张成叠写 NULL；返回叠数。已有 dhash 的照片不重算，增量跑很快。"""
+    ensure_stack_columns(conn)
+    cur = conn.cursor()
+    missing = cur.execute("SELECT path FROM photo_scores WHERE dhash IS NULL").fetchall()
+    for i, (path,) in enumerate(missing, 1):
+        h = compute_dhash(Path(path))
+        if h is not None:
+            cur.execute("UPDATE photo_scores SET dhash = ? WHERE path = ?", (f"{h:016x}", path))
+        if i % 500 == 0:
+            conn.commit()
+            log(f"指纹补算 {i}/{len(missing)} …")
+    conn.commit()
+
+    rows = cur.execute("SELECT path, exif_datetime, dhash FROM photo_scores").fetchall()
+    dated, undated = [], []
+    for path, dt, dh in rows:
+        t, h = _parse_dt(dt), int(dh, 16) if dh else None
+        if t and h:
+            dated.append((t, h, path))
+        else:
+            undated.append(path)
+    dated.sort(key=lambda x: x[0])
+
+    def joins(item, cluster):
+        t, h, _ = item
+        if (t - cluster[-1][0]).total_seconds() > STACK_GAP_MIN * 60:
+            return False
+        return any(bin(h ^ mh).count("1") <= STACK_HASH_MAX for _, mh, _ in cluster[-5:])
+
+    clusters, cur_cluster = [], []
+    for item in dated:
+        if cur_cluster and joins(item, cur_cluster):
+            cur_cluster.append(item)
+        else:
+            if cur_cluster:
+                clusters.append(cur_cluster)
+            cur_cluster = [item]
+    if cur_cluster:
+        clusters.append(cur_cluster)
+
+    assignments, n = [], 0
+    for cl in clusters:
+        if len(cl) >= 2:
+            n += 1
+            assignments += [(n, p) for _, _, p in cl]   # (stack_id, path)：对应 SET stack_id=? WHERE path=?
+        else:
+            assignments.append((None, cl[0][2]))
+    assignments += [(None, p) for p in undated]
+    cur.executemany("UPDATE photo_scores SET stack_id = ? WHERE path = ?", assignments)
+    cur.execute("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('stacks', ?)", (
+        json.dumps({"gap_min": STACK_GAP_MIN, "hash_max": STACK_HASH_MAX,
+                    "stacks": n, "at": time.strftime("%Y-%m-%d %H:%M:%S")}),))
+    conn.commit()
+    stacked = sum(len(cl) for cl in clusters if len(cl) >= 2)
+    log(f"分叠完成：{n} 叠 / {stacked} 张，单张 {len(dated) + len(undated) - stacked} 张"
+        f"（间隔 ≤{STACK_GAP_MIN} 分钟且指纹距离 ≤{STACK_HASH_MAX}）")
+    return n
+
+
 
 # 生成一句话文案
 def generate_side_caption(image_path: Path) -> str | None:
@@ -1229,7 +1353,19 @@ def main():
                         help="并发处理线程数（默认 1，即串行处理）")
     parser.add_argument("--debug", action="store_true",
                         help="调试模式：请求失败时打印请求体和响应体")
+    parser.add_argument("--stacks", action="store_true",
+                        help="只重算相似照片分叠（dHash 指纹 + 时间聚类），不调模型分析")
     args = parser.parse_args()
+
+    if args.stacks:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            rebuild_stacks(conn)
+        finally:
+            conn.close()
+        return
+
+    require_exiftool()   # 分析需要 exiftool；--stacks 分叠不需要，已在上面提前返回
 
     global DEBUG, IMAGE_DIR, BATCH_LIMIT
     if args.folder:
@@ -1446,10 +1582,11 @@ def main():
                     cost_str = f"{rec['cost']:4.1f}s" if rec else "N/A"
                     print(f"[进度] {bar} {progress*100:5.1f}%  {processed_now}/{total}  本张耗时 {cost_str}  预计剩余 {eta} ")
 
+    # 本批新照片入库后顺手重算分叠（已有指纹不重算，只增量补新照片）
+    rebuild_stacks(conn)
     conn.close()
     print("\n[完成] 本批次处理完成。")
 
 
 if __name__ == "__main__":
-    require_exiftool()
     main()

@@ -122,8 +122,8 @@ function placeCard(card) {
   placedCount++;
 }
 
-/* 同一分钟拍摄（连拍）暂视为一叠；正式的相似识别方式待定，只换 stackKey 即可 */
-let stacks = new Map();       // 分叠 key → { members, badge, card, slot, coverPath, repPhoto }
+/* 相似分叠：stack_id 来自分析阶段的 dHash 指纹 + 时间聚类（analyze_photos.rebuild_stacks） */
+let stacks = new Map();       // stack_id → { members, badge, card, slot, coverPath, repPhoto }
 let flowItems = [];           // 实际占了版面的照片（各叠的代表张），重排用
 
 /* ---------- 卡牌堆查看器：点卡片 → 屏幕中间弹出一叠牌（Swiper Cards 式），
@@ -340,7 +340,7 @@ function closeViewer() {
 
 function renderCards(items) {
   for (const p of items) {
-    const key = p.date || "";
+    const key = p.stack != null ? `s${p.stack}` : "";
     const hit = key && stacks.get(key);
     if (hit) {
       hit.members.push(p);
@@ -572,7 +572,7 @@ function bindEvents() {
   const activateCard = (card) => {
     const p = photos.find((x) => x.path === card.dataset.path);
     if (!p) return;
-    const stack = p.date && stacks.get(p.date);
+    const stack = p.stack != null ? stacks.get(`s${p.stack}`) : null;
     if (stack && stack.members.length > 1) openViewer(stack.members, stack);
     else openViewer([p]);
   };
