@@ -434,7 +434,8 @@ function syncUrl() {
   if (state.sort !== "memory") p.set("sort", state.sort);
   if (state.q) p.set("text", state.q);
   const qs = p.toString();
-  history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
+  // 直接拼在 origin 后（不带路径斜杠）：127.0.0.1:8788?tag=今日选片
+  history.replaceState(null, "", location.origin + (qs ? `?${qs}` : ""));
 }
 
 function stateFromUrl() {
