@@ -407,7 +407,7 @@ def _parse_dt(s) -> datetime | None:
 
 def ensure_stack_columns(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
-    for col in ("dhash TEXT", "stack_id INTEGER"):
+    for col in ("dhash TEXT", "stack_id INTEGER", "stack_cover INTEGER"):
         try:
             cur.execute(f"ALTER TABLE photo_scores ADD COLUMN {col}")
         except sqlite3.OperationalError:
@@ -417,7 +417,12 @@ def ensure_stack_columns(conn: sqlite3.Connection) -> None:
 
 
 def stacks_built(conn: sqlite3.Connection) -> bool:
-    ensure_stack_columns(conn)
+    """分叠是否已建好（列齐 + 记录存在）。缺列（如首次加 stack_cover）返回 False 触发重建，
+    重建时会做封面归一化，给每个叠补上初始封面。"""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(photo_scores)")}
+    if not {"dhash", "stack_id", "stack_cover"} <= cols:
+        ensure_stack_columns(conn)
+        return False
     return conn.execute("SELECT 1 FROM app_meta WHERE key = 'stacks'").fetchone() is not None
 
 
@@ -472,6 +477,7 @@ def rebuild_stacks(conn: sqlite3.Connection, log=print) -> int:
             assignments.append((None, cl[0][2]))
     assignments += [(None, p) for p in undated]
     cur.executemany("UPDATE photo_scores SET stack_id = ? WHERE path = ?", assignments)
+    _normalize_covers(cur)
     cur.execute("INSERT OR REPLACE INTO app_meta (key, value) VALUES ('stacks', ?)", (
         json.dumps({"gap_min": STACK_GAP_MIN, "hash_max": STACK_HASH_MAX,
                     "stacks": n, "at": time.strftime("%Y-%m-%d %H:%M:%S")}),))
@@ -480,6 +486,28 @@ def rebuild_stacks(conn: sqlite3.Connection, log=print) -> int:
     log(f"分叠完成：{n} 叠 / {stacked} 张，单张 {len(dated) + len(undated) - stacked} 张"
         f"（间隔 ≤{STACK_GAP_MIN} 分钟且指纹距离 ≤{STACK_HASH_MAX}）")
     return n
+
+
+def _normalize_covers(cur) -> None:
+    """封面归一化（重算分叠后必须跑）：
+    - 每个叠恰好一个封面：组内多个封面保留回忆度最高的，没有则补组内最高分；
+    - 单张/无叠清掉封面标记（封面只对叠有意义）。
+    用户手选的封面只要还在某个叠里就跟着走；重组合并出多封面时以回忆度定夺。"""
+    cur.execute("UPDATE photo_scores SET stack_cover = NULL WHERE stack_id IS NULL")
+    stack_ids = [r[0] for r in cur.execute(
+        "SELECT DISTINCT stack_id FROM photo_scores WHERE stack_id IS NOT NULL").fetchall()]
+    for sid in stack_ids:
+        rows = cur.execute(
+            "SELECT path, stack_cover, memory_score FROM photo_scores WHERE stack_id = ?", (sid,)
+        ).fetchall()
+        covers = [r for r in rows if r[1]]
+        if len(covers) == 1:
+            continue
+        keep = (max(covers, key=lambda r: r[2] or 0) if covers
+                else max(rows, key=lambda r: r[2] or 0))[0]
+        cur.execute(
+            "UPDATE photo_scores SET stack_cover = CASE WHEN path = ? THEN 1 ELSE NULL END "
+            "WHERE stack_id = ?", (keep, sid))
 
 
 

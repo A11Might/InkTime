@@ -91,7 +91,8 @@ def serialize(row: dict) -> dict:
         "city": row.get("exif_city") or "",
         "w": row.get("width") or 0,
         "h": row.get("height") or 0,
-        "stack": row.get("stack_id"),   # 相似分叠 id（analyze_photos 的 dHash+时间聚类），单张为 None
+        "stack": row.get("stack_id"),     # 相似分叠 id（analyze_photos 的 dHash+时间聚类），单张为 None
+        "cover": 1 if row.get("stack_cover") else 0,   # 是否是所在叠的封面（用户手选，存库）
     }
 
 
@@ -127,12 +128,7 @@ def stats():
     pushed = daily.load_pushed(DB_PATH)
     resolved = daily.resolve_day(datetime.now().date(), pool, pushed)
     day_iso = resolved.isoformat() if resolved else ""
-    day_count = 0
-    if resolved:
-        day_count = db_rows(
-            f"SELECT COUNT(*) AS c FROM photo_scores WHERE SUBSTR({DATE10},6,5) = ?",
-            (resolved.strftime("%m-%d"),),
-        )[0]["c"]
+    day_count = len(daily.day_scenes(resolved, pool)) if resolved else 0   # 候选按场景计
     return jsonify({
         "total": agg["total"],
         "avg_memory": round(agg["avg_memory"]),
@@ -197,6 +193,25 @@ def types():
                 seen.add(t)
                 tags.append(t)
     return jsonify(["全部"] + tags)
+
+
+@app.post("/api/cover")
+def set_cover():
+    """把某张照片设为它所在叠的封面：清掉同叠旧封面，再标记这张。"""
+    data = request.get_json(silent=True) or {}
+    path = data.get("path", "")
+    p = resolve_image(path)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            "UPDATE photo_scores SET stack_cover = NULL "
+            "WHERE stack_id = (SELECT stack_id FROM photo_scores WHERE path = ?) "
+            "AND stack_id IS NOT NULL", (str(p),))
+        conn.execute("UPDATE photo_scores SET stack_cover = 1 WHERE path = ?", (str(p),))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
 
 
 @app.get("/api/thumb")

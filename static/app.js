@@ -11,7 +11,7 @@ const captionOverrides = new Map();
 let typeList = [];            // /api/types 返回的全部标签
 let resolvedDay = "";         // 今日选片解析出的那天（YYYY-MM-DD）
 let todayIsToday = false;     // 落点就是今天（未发生回退）
-let todayCount = 0;           // 落点当天的照片总数
+let todayCount = 0;           // 落点当天的候选场景数（叠+单张，与推送口径一致）
 
 /* ---------- 瀑布流：JS 分列（从左到右逐行排序）+ 无限滚动 ---------- */
 const PAGE_SIZE = 60;          // 每页张数，滚动临近底部时自动追加
@@ -70,7 +70,7 @@ function renderChips() {
   const allBtn = `<button class="chip-btn${!state.day && !state.types.length ? " active" : ""}" data-type="全部" title="清空所有筛选，看全部照片">全部</button>`;
   const dayBtn = resolvedDay
     ? `<button class="chip-btn chip-day${state.day ? " active" : ""}" data-chip="day"
-        title="${todayIsToday ? "只看历史上的今天" : "今天没达标照片，已按推送逻辑回退到这一天"}">今日选片${todayIsToday ? "" : " · " + resolvedDay.slice(5)} · ${todayCount}</button>`
+        title="${todayIsToday ? "只看历史上的今天" : "今天没达标场景，已按推送逻辑回退到这一天"}">今日选片${todayIsToday ? "" : " · " + resolvedDay.slice(5)} · ${todayCount} 场景</button>`
     : "";
   const typeBtns = typeList.filter((t) => t !== "全部").map((t) => {
     const active = state.types.includes(t);
@@ -302,7 +302,15 @@ function openViewer(items, stack = null) {
 
 function confirmViewer() {
   const m = viewerItems?.[viewerIdx];
-  if (m && viewerStack && viewerStack.members.length > 1) setCover(viewerStack, m);   // 挑中谁，谁当这叠的封面
+  if (m && viewerStack && viewerStack.members.length > 1) {
+    setCover(viewerStack, m);   // 挑中谁，谁当这叠的封面
+    // 封面选择写库持久化：清同叠旧封面 + 标记新封面；失败不打断（下次选时再写）
+    fetch("/api/cover", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: m.path }),
+    }).catch(() => {});
+  }
   closeViewer();
   if (m) selectPhoto(m);
 }
@@ -321,8 +329,7 @@ function setCover(stack, m) {
   card.querySelector(".card-meta .meta").textContent =
     `${fmtDate(m.date) || "无日期"}${m.city ? " · " + m.city : ""}`;
   card.querySelector(".type-chip").textContent = m.type;
-  card.dataset.path = m.path;
-  const fi = flowItems.indexOf(old);
+  card.dataset.path = m.path;  const fi = flowItems.indexOf(old);
   if (fi !== -1) flowItems[fi] = m;
   if (old && cardEls.get(old.path) === stack.slot) {
     cardEls.delete(old.path);
@@ -347,6 +354,7 @@ function renderCards(items) {
       hit.badge.textContent = `×${hit.members.length}`;
       hit.card.classList.add("stacked");
       hit.slot.classList.add("has-stack");
+      if (p.cover && hit.coverPath !== p.path) setCover(hit, p);   // 封面成员到了，卡片换成它
       continue;
     }
     const t = document.createElement("template");

@@ -1,9 +1,9 @@
 """每日选片并推送到 Dot. Quote/0。
 
-选片逻辑抄自原版 dai-hongtao/InkTime 的 render_daily_photo.py：
-先在「历史上的今天」（月-日相同）里挑回忆分达标的照片；今天没有合适的就往前
-一天天回退，最多回退一年；实在没有就用全库最高分兜底。在此之上结合本项目的
-推送历史做了点改良：优先挑没推送过的，都推过则挑最久没推的那张。
+选片单位是「场景」：相似照片叠（dHash+时间聚类）算一个场景，单张各算一个。
+先在「历史上的今天」（月-日相同）里找没回忆过的达标场景；今天没有合格场景就往前
+一天天回退，最多回退一年；场景都回忆过了就挑最久没回忆的场景；实在没有就用全库
+最高分兜底。推的是场景的封面（用户可在控制台为每叠挑封面）。
 
 定时推送长在 app.py 服务里（AUTO_PUSH）；这个文件是选片逻辑本体 +
 手动命令行（测试选片、补推一张时用）：
@@ -43,10 +43,10 @@ def parse_date(row: dict) -> date | None:
 
     兼容 2024-09-21 与 EXIF 冒号风格 2024:09:21 两种前缀。
     """
-    raw = str(row.get("exif_datetime") or "").strip()
+    raw = str(row["exif_datetime"] or "").strip()
     if not raw:
         try:
-            raw = str((json.loads(row.get("exif_json") or "{}")).get("datetime") or "")
+            raw = str((json.loads(row["exif_json"] or "{}")).get("datetime") or "")
         except (ValueError, TypeError):
             raw = ""
     raw = raw[:10].replace(":", "-")
@@ -61,9 +61,17 @@ def load_pool(db_path: Path) -> tuple[list[dict], int]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        rows = [dict(r) for r in conn.execute(
-            "SELECT path, exif_datetime, exif_json, memory_score, "
-            "side_caption, caption, exif_city FROM photo_scores")]
+        conn.execute("ALTER TABLE photo_scores ADD COLUMN stack_id INTEGER")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE photo_scores ADD COLUMN stack_cover INTEGER")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        rows = conn.execute(
+            "SELECT path, exif_datetime, exif_json, memory_score, side_caption, caption, "
+            "exif_city, stack_id, stack_cover FROM photo_scores").fetchall()
     finally:
         conn.close()
     total = len(rows)
@@ -81,6 +89,8 @@ def load_pool(db_path: Path) -> tuple[list[dict], int]:
             "memory": r["memory_score"] or 0,
             "caption": r["side_caption"] or r["caption"] or "",
             "city": r["exif_city"] or "",
+            "stack": r["stack_id"],           # 相似分叠 id（None = 单张）
+            "cover": bool(r["stack_cover"]),  # 是否被选为这叠的封面
         })
     return pool, total
 
@@ -106,43 +116,69 @@ def pick_one(cands: list[dict], pushed: dict[str, str]) -> tuple[dict, str]:
     return min(cands, key=lambda p: (pushed.get(p["path"], ""), p["path"])), "都推过，挑最久没推的"
 
 
-def resolve_day(target: date, pool: list[dict], pushed: dict[str, str]) -> date | None:
-    """今日选片落在哪一天：今天有没推送过的达标照片就是今天，否则往前一天天
-    回退（最多一年）；都推过了退而求其次找最近有达标照片的日子。找不到 None。
+def day_scenes(day, pool) -> list[dict]:
+    """某月-日的候选按「场景」归组：相似叠算一个场景（封面作代表），单张各算一个。
+    场景达标 = 组内任一成员回忆分达阈值。"""
+    md = day.strftime("%m-%d")
+    cands = [p for p in pool if p["md"] == md and p["memory"] >= MEMORY_THRESHOLD]
+    groups: dict = {}
+    for c in cands:
+        key = c["stack"] if c["stack"] else ("solo", c["path"])
+        groups.setdefault(key, []).append(c)
+    scenes = []
+    for members in groups.values():
+        cover = next((m for m in members if m["cover"]), None) \
+            or max(members, key=lambda m: m["memory"])
+        scenes.append({"cover": cover, "members": members})
+    return scenes
 
-    pick() 用它选照片，app.py 也用它解析「今日选片」筛选器落在哪一天。
-    """
+
+def scene_recalled(scene, pushed) -> bool:
+    """场景是否回忆过：组内任一成员出现在推送记录里就算（手动推过也算）。"""
+    return any(m["path"] in pushed for m in scene["members"])
+
+
+def scene_last_recall(scene, pushed) -> str:
+    return max((pushed.get(m["path"], "") for m in scene["members"]), default="")
+
+
+def resolve_day(target: date, pool: list[dict], pushed: dict[str, str]) -> date | None:
+    """今日选片落在哪天：今天有没回忆过的达标场景就是今天，否则往前一天天回退（最多
+    一年）；一年内场景都回忆过了，退回最近有达标场景的那天。找不到 None。"""
+    fallback = None
     for offset in range(0, 366):
         d = target - timedelta(days=offset)
-        if any(p["md"] == d.strftime("%m-%d")
-               and p["memory"] >= MEMORY_THRESHOLD and p["path"] not in pushed
-               for p in pool):
+        scenes = day_scenes(d, pool)
+        if not scenes:
+            continue
+        if any(not scene_recalled(s, pushed) for s in scenes):
             return d
-    for offset in range(0, 366):
-        d = target - timedelta(days=offset)
-        if any(p["md"] == d.strftime("%m-%d") and p["memory"] >= MEMORY_THRESHOLD
-               for p in pool):
-            return d
+        if fallback is None:
+            fallback = d
     return None
 
 
 def pick(target: date, pool: list[dict], pushed: dict[str, str]) -> tuple[dict | None, str]:
-    """选片主逻辑，返回 (照片, 选择原因)；一张都没有返回 (None, 原因)。"""
+    """选片主逻辑：场景为候选单位，推的是场景封面。返回 (照片, 选择原因)。"""
     day = resolve_day(target, pool, pushed)
-    if day is not None:
-        offset = (target - day).days
-        when = "历史上的今天" if offset == 0 else f"历史上的今天（回退 {offset} 天）"
-        cands = [p for p in pool if p["md"] == day.strftime("%m-%d")
-                 and p["memory"] >= MEMORY_THRESHOLD]
-        photo, how = pick_one(cands, pushed)
-        return photo, f"{when}，{how}"
-    # 兜底：全库最高分（还达不到阈值就放宽阈值）
-    fallback = [p for p in pool if p["memory"] >= MEMORY_THRESHOLD] or pool
-    if not fallback:
-        return None, "全库没有带拍摄日期的照片"
-    top = sorted(fallback, key=lambda p: p["memory"], reverse=True)[:10]
-    photo, how = pick_one(top, pushed)
-    return photo, f"近一年没有达标照片，全库兜底（前 {len(top)} 高分里{how}）"
+    if day is None:
+        fallback = [p for p in pool if p["memory"] >= MEMORY_THRESHOLD] or pool
+        if not fallback:
+            return None, "全库没有带拍摄日期的照片"
+        top = sorted(fallback, key=lambda p: p["memory"], reverse=True)[:10]
+        photo, how = pick_one(top, pushed)
+        return photo, f"近一年没有达标场景，全库兜底（前 {len(top)} 高分里{how}）"
+    offset = (target - day).days
+    when = "历史上的今天" if offset == 0 else f"历史上的今天（回退 {offset} 天）"
+    scenes = day_scenes(day, pool)
+    fresh = [s for s in scenes if not scene_recalled(s, pushed)]
+    if fresh:
+        scene = random.choice(fresh)
+        how = "没回忆过的场景里随机挑"
+    else:
+        scene = min(scenes, key=lambda s: scene_last_recall(s, pushed))
+        how = "场景都回忆过了，挑最久没回忆的"
+    return scene["cover"], f"{when}，{how}"
 
 
 def already_pushed_today(db_path: Path, target: date) -> bool:
@@ -159,18 +195,20 @@ def already_pushed_today(db_path: Path, target: date) -> bool:
 
 
 def select(db_path: Path, target: date, count: int = DAILY_COUNT) -> list[tuple[dict, str]]:
-    """选出 count 张：不重复、优先没推送过的。CLI 和 app.py 服务内定时共用。"""
+    """选出 count 个场景（推各场景封面）：同场景不重复。CLI 和 app.py 服务内定时共用。"""
     pool, _ = load_pool(db_path)
     pushed = load_pushed(db_path)
     picks: list[tuple[dict, str]] = []
-    chosen: list[dict] = []
     for _ in range(count):
-        remaining = [p for p in pool if p not in chosen] or pool
-        photo, why = pick(target, remaining, pushed)
+        photo, why = pick(target, pool, pushed)
         if photo is None:
             break
-        chosen.append(photo)
         picks.append((photo, why))
+        # 整个场景（同叠的全部成员）移出候选池，下一张换别的场景
+        if photo["stack"]:
+            pool = [p for p in pool if p["stack"] != photo["stack"]]
+        else:
+            pool = [p for p in pool if p["path"] != photo["path"]]
     return picks
 
 
