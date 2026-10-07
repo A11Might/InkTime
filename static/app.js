@@ -340,7 +340,7 @@ function closeViewer() {
 
 function renderCards(items) {
   for (const p of items) {
-    const key = p.stack != null ? `s${p.stack}` : "";
+    const key = p.stack ?? "";   // stack_id 直接做 key（从 1 起）；无叠用 "" 占位
     const hit = key && stacks.get(key);
     if (hit) {
       hit.members.push(p);
@@ -572,7 +572,7 @@ function bindEvents() {
   const activateCard = (card) => {
     const p = photos.find((x) => x.path === card.dataset.path);
     if (!p) return;
-    const stack = p.stack != null ? stacks.get(`s${p.stack}`) : null;
+    const stack = p.stack != null ? stacks.get(p.stack) : null;
     if (stack && stack.members.length > 1) openViewer(stack.members, stack);
     else openViewer([p]);
   };

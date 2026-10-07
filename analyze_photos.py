@@ -375,18 +375,16 @@ STACK_GAP_MIN = int(getattr(cfg, "STACK_GAP_MIN", 3))     # 相邻两张最大�
 STACK_HASH_MAX = int(getattr(cfg, "STACK_HASH_MAX", 30))  # dHash 汉明距离阈值（64 位）
 
 
-def compute_dhash(path: Path, size: int = 8) -> int | None:
-    """dHash：缩到 (size+1)×size 灰度，横向相邻像素比较拼成 64 位指纹。"""
+def compute_dhash(path: Path) -> int | None:
+    """dHash：缩到 9×8 灰度，横向相邻像素比较拼成 64 位指纹。"""
     try:
         img = Image.open(path)
         img = ImageOps.exif_transpose(img)   # 按 EXIF 方向转正，横竖翻转的同场景才能对上
-        img = img.convert("L").resize((size + 1, size), Image.LANCZOS)
-        b = img.tobytes()
-        w = size + 1
+        b = img.convert("L").resize((9, 8), Image.LANCZOS).tobytes()
         bits = 0
-        for r in range(size):
-            for c in range(size):
-                bits = (bits << 1) | (1 if b[r * w + c] > b[r * w + c + 1] else 0)
+        for r in range(8):
+            for c in range(8):
+                bits = (bits << 1) | (1 if b[r * 9 + c] > b[r * 9 + c + 1] else 0)
         return bits
     except Exception:
         return None
@@ -396,7 +394,7 @@ _DT_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y:%m:%d %H:%M:%S",
                "%Y-%m-%d %H:%M", "%Y:%m:%d %H:%M", "%Y-%m-%d", "%Y:%m:%d")
 
 
-def _parse_dt(s) -> "datetime | None":
+def _parse_dt(s) -> datetime | None:
     """库里的 exif_datetime 有 - 与 : 两种日期分隔的写法，逐格式尝试解析。"""
     s = str(s or "").strip()
     for f in _DT_FORMATS:
