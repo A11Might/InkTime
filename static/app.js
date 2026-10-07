@@ -480,7 +480,6 @@ async function loadMore() {
 
 /* ---------- 墨水屏预览 ---------- */
 
-let renderTimer = null;
 function refreshPreview({ flash = false } = {}) {
   if (!current) return;
   const caption = captionOverrides.get(current.path) ?? current.caption;
