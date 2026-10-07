@@ -419,13 +419,15 @@ async function fetchPage(offset) {
   };
 }
 
-/* ---------- 筛选状态 ↔ URL：刷新或把链接发给别人都保持当前筛选 ---------- */
+/* ---------- 筛选状态 ↔ URL：刷新或把链接发给别人都保持当前筛选 ----------
+   all=1 看全部（今日选片关）｜tag=标签（逗号分隔）｜sort=排序｜text=搜索文字。
+   默认（今日选片开）不带参数，URL 保持干净。 */
 function syncUrl() {
   const p = new URLSearchParams();
-  if (!state.day) p.set("today", "0");
-  if (state.types.length) p.set("types", state.types.join(","));
+  if (!state.day) p.set("all", "1");
+  if (state.types.length) p.set("tag", state.types.join(","));
   if (state.sort !== "memory") p.set("sort", state.sort);
-  if (state.q) p.set("q", state.q);
+  if (state.q) p.set("text", state.q);
   const qs = p.toString();
   history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
 }
@@ -434,11 +436,11 @@ function stateFromUrl() {
   const p = new URLSearchParams(location.search);
   const sort = p.get("sort");
   if (sort && ["memory", "beauty", "date"].includes(sort)) state.sort = sort;
-  const types = p.get("types");
-  if (types) state.types = types.split(",").filter(Boolean);
-  const q = p.get("q");
-  if (q) state.q = q;
-  if (p.get("today") === "0") state.day = false;
+  const tag = p.get("tag");
+  if (tag) state.types = tag.split(",").filter(Boolean);
+  const text = p.get("text");
+  if (text) state.q = text;
+  if (p.get("all") === "1") state.day = false;
 }
 
 async function loadPhotos() {
