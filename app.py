@@ -128,7 +128,13 @@ def stats():
     pushed = daily.load_pushed(DB_PATH)
     resolved = daily.resolve_day(datetime.now().date(), pool, pushed)
     day_iso = resolved.isoformat() if resolved else ""
-    day_count = len(daily.day_scenes(resolved, pool)) if resolved else 0   # 候选按场景计
+    # 今日照片数：叠算一张（与画廊卡片一一对应，不看推送阈值）
+    if resolved:
+        md = resolved.strftime("%m-%d")
+        day_count = len({p["stack"] if p["stack"] else p["path"]
+                         for p in pool if p["md"] == md})
+    else:
+        day_count = 0
     return jsonify({
         "total": agg["total"],
         "avg_memory": round(agg["avg_memory"]),

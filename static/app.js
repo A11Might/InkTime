@@ -70,7 +70,7 @@ function renderChips() {
   const allBtn = `<button class="chip-btn${!state.day && !state.types.length ? " active" : ""}" data-type="全部" title="清空所有筛选，看全部照片">全部</button>`;
   const dayBtn = resolvedDay
     ? `<button class="chip-btn chip-day${state.day ? " active" : ""}" data-chip="day"
-        title="${todayIsToday ? "只看历史上的今天" : "今天没达标场景，已按推送逻辑回退到这一天"}">今日选片${todayIsToday ? "" : " · " + resolvedDay.slice(5)} · ${todayCount} 场景</button>`
+        title="${todayIsToday ? "只看历史上的今天" : "今天没达标场景，已按推送逻辑回退到这一天"}">今日选片${todayIsToday ? "" : " · " + resolvedDay.slice(5)} · ${todayCount}</button>`
     : "";
   const typeBtns = typeList.filter((t) => t !== "全部").map((t) => {
     const active = state.types.includes(t);
