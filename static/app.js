@@ -419,7 +419,30 @@ async function fetchPage(offset) {
   };
 }
 
+/* ---------- 筛选状态 ↔ URL：刷新或把链接发给别人都保持当前筛选 ---------- */
+function syncUrl() {
+  const p = new URLSearchParams();
+  if (!state.day) p.set("today", "0");
+  if (state.types.length) p.set("types", state.types.join(","));
+  if (state.sort !== "memory") p.set("sort", state.sort);
+  if (state.q) p.set("q", state.q);
+  const qs = p.toString();
+  history.replaceState(null, "", qs ? `?${qs}` : location.pathname);
+}
+
+function stateFromUrl() {
+  const p = new URLSearchParams(location.search);
+  const sort = p.get("sort");
+  if (sort && ["memory", "beauty", "date"].includes(sort)) state.sort = sort;
+  const types = p.get("types");
+  if (types) state.types = types.split(",").filter(Boolean);
+  const q = p.get("q");
+  if (q) state.q = q;
+  if (p.get("today") === "0") state.day = false;
+}
+
 async function loadPhotos() {
+  syncUrl();   // 每次筛选状态变化都同步进 URL（replaceState，不污染历史记录）
   const seq = ++reqSeq;
   busy = true;
   exhausted = false;
@@ -689,6 +712,9 @@ function bindEvents() {
 /* ---------- 启动 ---------- */
 
 (async function init() {
+  stateFromUrl();                            // URL 里的筛选优先于默认值
+  $("#sortSel").value = state.sort;
+  $("#searchInput").value = state.q;
   bindEvents();
   await Promise.all([loadStats(), loadTypes()]);
   await loadPhotos();   // 首页加载完自动选中第一名（loadPhotos 内处理）
