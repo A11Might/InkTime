@@ -32,8 +32,6 @@ from dot_push import (  # noqa: E402
     DB_PATH,
     OUTPUT_DIR,
     PORT,
-    PUSH_TABLE_SQL,
-    push_info,
     push_photo,
 )
 
@@ -123,10 +121,9 @@ def stats():
                   COALESCE(SUM(memory_score >= 85), 0) AS high_count
            FROM photo_scores"""
     )[0]
-    # 今日选片落在哪一天：与每日推送同一套回退逻辑（今天没达标照片就往前找）
+    # 今日选片落在哪一天：与每日推送同一套逻辑（从今天往前找第一个有达标场景的月-日）
     pool, _ = daily.load_pool(DB_PATH)
-    pushed = daily.load_pushed(DB_PATH)
-    resolved = daily.resolve_day(datetime.now().date(), pool, pushed)
+    resolved = daily.resolve_day(datetime.now().date(), pool)
     day_iso = resolved.isoformat() if resolved else ""
     # 今日照片数：叠算一张（与画廊卡片一一对应，不看推送阈值）
     if resolved:
@@ -256,39 +253,17 @@ def render_api():
     return send_file(io.BytesIO(png), mimetype="image/png", max_age=60)
 
 
-@app.get("/api/pushinfo")
-def pushinfo_api():
-    """某张照片的历史推送记录：次数 + 最近一次时间。"""
-    p = resolve_image(request.args.get("path", ""))
-    return jsonify(push_info(str(p)))
-
-
 # ---------- 推送到 Quote/0 ----------
 
 
 @app.get("/latest")
 def s_latest():
-    """工作台「碰一碰」标签入口：跳到最近一次推送的展示页。"""
-    pid = ""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute(PUSH_TABLE_SQL)
-        row = conn.execute(
-            "SELECT pid FROM push_history ORDER BY pushed_at DESC, rowid DESC LIMIT 1"
-        ).fetchone()
-        pid = row["pid"] if row else ""
-    except sqlite3.Error:
-        pid = ""
-    finally:
-        conn.close()
-    if not pid:  # 库里没有记录时，回退到 output 目录里最新的推送
-        jsons = sorted(OUTPUT_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime)
-        if jsons:
-            pid = jsons[-1].stem
-    if not pid:
+    """工作台「碰一碰」标签入口：跳到最近一次推送的展示页。
+    推送历史表已移除，直接取 output 目录里最新的一份推送元数据。"""
+    jsons = sorted(OUTPUT_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime)
+    if not jsons:
         return redirect("/")
-    return redirect(f"/memory/{pid}", code=302)
+    return redirect(f"/memory/{jsons[-1].stem}", code=302)
 
 
 @app.get("/memory/<pid>")
@@ -333,7 +308,6 @@ def push_api():
     body = {"ok": r["ok"], "message": r["message"]}
     if r["ok"]:
         body["page"] = r["page"]
-        body["push_count"] = r["push_count"]
     return jsonify(body), r["status"]
 
 
@@ -349,26 +323,20 @@ def auto_push_status() -> dict:
     return {
         "enabled": AUTO_PUSH,
         "time": f"{PUSH_HOUR:02d}:{PUSH_MINUTE:02d}",
-        "pushed_today": _pushed_today(date.today()),
     }
 
 
-def _pushed_today(day: date) -> bool:
-    if not DB_PATH.exists():
-        return False
-    try:
-        return daily.already_pushed_today(DB_PATH, day)
-    except sqlite3.Error:
-        return False
+_last_push_date: date | None = None  # 进程内记忆：今天定时推送跑过了没有（选片已无推送历史可查）
 
 
 def _compute_next_run() -> datetime:
-    """下一次推送时刻：今天的推送点已过但还没推过就现在补跑；推过或还没到点就排下一个推送点。"""
+    """下一次推送时刻：今天的推送点还没到就等它；已过且今天还没跑过就现在补跑
+    （Mac 睡眠错过，唤醒后补推）；跑过了就排明天。"""
     now = datetime.now()
     target = now.replace(hour=PUSH_HOUR, minute=PUSH_MINUTE, second=0, microsecond=0)
     if now < target:
         return target
-    return now if not _pushed_today(now.date()) else target + timedelta(days=1)
+    return now if _last_push_date != now.date() else target + timedelta(days=1)
 
 
 def _auto_push_once(day: date) -> bool:
@@ -394,22 +362,23 @@ def _auto_push_once(day: date) -> bool:
 
 
 def _auto_push_loop() -> None:
+    global _last_push_date
     next_run = _compute_next_run()
     print(f"[daily-push] 已启用：每天 {PUSH_HOUR:02d}:{PUSH_MINUTE:02d} 自动推送"
           f"（下次 {next_run.strftime('%Y-%m-%d %H:%M')}）", flush=True)
     while True:
         now = datetime.now()
         if now >= next_run:
-            if _pushed_today(now.date()):
-                next_run = _compute_next_run()  # 今天已经推过（比如手动推了），排下一个推送点
+            try:
+                ok = _auto_push_once(next_run.date())
+            except Exception as exc:  # 定时推送出错不能拖垮服务
+                print(f"[daily-push] 出错：{exc}", flush=True)
+                ok = False
+            if ok:
+                _last_push_date = now.date()
+                next_run = _compute_next_run()
             else:
-                try:
-                    ok = _auto_push_once(next_run.date())
-                except Exception as exc:  # 定时推送出错不能拖垮服务
-                    print(f"[daily-push] 出错：{exc}", flush=True)
-                    ok = False
-                # 失败 10 分钟后重试；成功就排下一个推送点
-                next_run = _compute_next_run() if ok else now + timedelta(minutes=10)
+                next_run = now + timedelta(minutes=10)  # 失败 10 分钟后重试
         time.sleep(30)
 
 

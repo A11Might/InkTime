@@ -38,45 +38,6 @@ DOT_API_BASE = getattr(config, "DOT_API_BASE", "https://dot.mindreset.tech")
 PORT = 8788
 OUTPUT_DIR = ROOT / "output"  # 每次推送一个 <id>.*：成图 / 预览 / 原图 / 元数据
 
-PUSH_TABLE_SQL = """CREATE TABLE IF NOT EXISTS push_history (
-    pid TEXT PRIMARY KEY,
-    photo_path TEXT,
-    caption TEXT,
-    date_text TEXT,
-    place TEXT,
-    pushed_at TEXT
-)"""
-
-
-def record_push(pid: str, photo_path: str, caption: str, date_text: str,
-                place: str, pushed_at: str) -> None:
-    """推送成功后落库：每个 pid 一行，用于「这张照片推过没有/推过几次」。"""
-    conn = sqlite3.connect(DB_PATH)
-    try:
-        conn.execute(PUSH_TABLE_SQL)
-        conn.execute(
-            "INSERT INTO push_history VALUES (?, ?, ?, ?, ?, ?)",
-            (pid, photo_path, caption, date_text, place, pushed_at),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def push_info(photo_path: str) -> dict:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute(PUSH_TABLE_SQL)
-        row = conn.execute(
-            "SELECT COUNT(*) AS n, MAX(pushed_at) AS last "
-            "FROM push_history WHERE photo_path = ?",
-            (photo_path,),
-        ).fetchone()
-        return {"count": row["n"], "last": row["last"] or ""}
-    finally:
-        conn.close()
-
 
 def lan_ip() -> str:
     """局域网 IP（手机碰一碰打开链接用），取不到就回退本机回环。"""
@@ -102,9 +63,9 @@ PUSH_ERROR_HINTS = {
 def push_photo(path: Path, caption: str = "", date_text: str = "",
                place: str = "", border: int = 0,
                refresh_now: bool = True) -> dict:
-    """渲染一张照片并推送到 Dot. 设备，成功后写推送历史与碰一碰页面。
+    """渲染一张照片并推送到 Dot. 设备。
 
-    返回 {"ok", "message", "status", "pid", "page", "push_count"}；
+    返回 {"ok", "message", "status", "pid", "page"}；
     失败时 ok=False，status 为建议的 HTTP 状态码（脚本场景只看 ok/message）。
     """
     import render as renderer  # 同目录模块
@@ -151,7 +112,6 @@ def push_photo(path: Path, caption: str = "", date_text: str = "",
         "beauty": info.get("beauty_score") or 0,
         "w": orig.width, "h": orig.height,
         "ts": pushed_at,
-        "push_count": push_info(str(path))["count"] + 1,  # 含本次
     }
     (OUTPUT_DIR / f"{pid}.json").write_text(
         json.dumps(meta, ensure_ascii=False), encoding="utf-8")
@@ -184,11 +144,9 @@ def push_photo(path: Path, caption: str = "", date_text: str = "",
         return {"ok": False, "status": 502, "message": "无法连接 Dot. 服务，请检查网络"}
 
     if resp.status_code == 200:
-        # push_history 里加上的这一行，恰好就是 meta 里预写的 push_count
-        record_push(pid, str(path), caption, date_text, place, pushed_at)
         msg = "已保存，设备唤醒后显示" if not refresh_now else "已推送到设备，屏幕刷新中"
         return {"ok": True, "status": 200, "message": msg, "pid": pid,
-                "page": f"/memory/{pid}", "push_count": meta["push_count"]}
+                "page": f"/memory/{pid}"}
 
     hint = PUSH_ERROR_HINTS.get(resp.status_code, f"推送失败（HTTP {resp.status_code}）")
     try:

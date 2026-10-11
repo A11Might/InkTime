@@ -1,16 +1,17 @@
 """每日选片并推送到 Dot. Quote/0。
 
-选片单位是「场景」：相似照片叠（dHash+时间聚类）算一个场景，单张各算一个。
-先在「历史上的今天」（月-日相同）里找没回忆过的达标场景；今天没有合格场景就往前
-一天天回退，最多回退一年；场景都回忆过了就挑最久没回忆的场景；实在没有就用全库
-最高分兜底。推的是场景的封面（用户可在控制台为每叠挑封面）。
+选片逻辑与上游 dai-hongtao/InkTime 一致：单张照片、纯随机、无推送记忆。
+- 从今天往前找第一个有达标照片（回忆分 ≥ MEMORY_THRESHOLD）的月-日（跨年，
+  最多回退一年），在当天的达标照片里随机挑 DAILY_COUNT 张；
+- 一年都没有达标照片，就用全库回忆分最高的前 10 名兜底；
+- 不记录、不排除推过的照片——随机到重复的就是重复的。
+相似照片分叠只用于画廊聚合浏览（卡牌堆/封面），不参与推送。
 
 定时推送长在 app.py 服务里（AUTO_PUSH）；这个文件是选片逻辑本体 +
 手动命令行（测试选片、补推一张时用）：
 
     python3.11 daily_push.py --dry-run           # 只显示会推哪张，不真推
     python3.11 daily_push.py --date 2001-02-03   # 模拟别的日子
-    python3.11 daily_push.py --force             # 今天已推过也再推一张
 """
 from __future__ import annotations
 
@@ -95,135 +96,52 @@ def load_pool(db_path: Path) -> tuple[list[dict], int]:
     return pool, total
 
 
-def load_pushed(db_path: Path) -> dict[str, str]:
-    """path → 最近一次推送时间；没推过的不在字典里。"""
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.execute(dot_push.PUSH_TABLE_SQL)
-        rows = conn.execute(
-            "SELECT photo_path, MAX(pushed_at) FROM push_history GROUP BY photo_path"
-        ).fetchall()
-        return {p: t for p, t in rows if p}
-    finally:
-        conn.close()
-
-
-def pick_one(cands: list[dict], pushed: dict[str, str]) -> tuple[dict, str]:
-    """从候选里挑一张：优先没推送过的随机挑；都推过则挑最久没推的。"""
-    unpushed = [p for p in cands if p["path"] not in pushed]
-    if unpushed:
-        return random.choice(unpushed), "没推送过的里随机挑"
-    return min(cands, key=lambda p: (pushed.get(p["path"], ""), p["path"])), "都推过，挑最久没推的"
-
-
-def day_scenes(day, pool) -> list[dict]:
-    """某月-日的候选按「场景」归组：相似叠算一个场景（封面作代表），单张各算一个。
-    场景达标 = 组内任一成员回忆分达阈值。"""
+def day_candidates(day, pool) -> list[dict]:
+    """某月-日的达标照片（回忆分 ≥ 阈值，跨年同月-日）。
+    推送以单张为单位；相似分叠只在画廊里聚合浏览，不参与推送。"""
     md = day.strftime("%m-%d")
-    cands = [p for p in pool if p["md"] == md and p["memory"] >= MEMORY_THRESHOLD]
-    groups: dict = {}
-    for c in cands:
-        key = c["stack"] if c["stack"] else ("solo", c["path"])
-        groups.setdefault(key, []).append(c)
-    scenes = []
-    for members in groups.values():
-        cover = next((m for m in members if m["cover"]), None) \
-            or max(members, key=lambda m: m["memory"])
-        scenes.append({"cover": cover, "members": members})
-    return scenes
+    return [p for p in pool if p["md"] == md and p["memory"] >= MEMORY_THRESHOLD]
 
 
-def scene_recalled(scene, pushed) -> bool:
-    """场景是否回忆过：组内任一成员出现在推送记录里就算（手动推过也算）。"""
-    return any(m["path"] in pushed for m in scene["members"])
-
-
-def scene_last_recall(scene, pushed) -> str:
-    return max((pushed.get(m["path"], "") for m in scene["members"]), default="")
-
-
-def resolve_day(target: date, pool: list[dict], pushed: dict[str, str]) -> date | None:
-    """今日选片落在哪天：今天有没回忆过的达标场景就是今天，否则往前一天天回退（最多
-    一年）；一年内场景都回忆过了，退回最近有达标场景的那天。找不到 None。"""
-    fallback = None
+def resolve_day(target: date, pool: list[dict]) -> date | None:
+    """「历史上的今天」落在哪天：从今天往前一天天回退（最多一年），
+    第一个有达标照片的月-日就是它。选片不带任何推送记忆——今天有照片，
+    哪怕昨天刚推过同一张，今天照样从今天挑（上游式纯随机）。"""
     for offset in range(0, 366):
         d = target - timedelta(days=offset)
-        scenes = day_scenes(d, pool)
-        if not scenes:
-            continue
-        if any(not scene_recalled(s, pushed) for s in scenes):
+        if day_candidates(d, pool):
             return d
-        if fallback is None:
-            fallback = d
     return None
 
 
-def pick(target: date, pool: list[dict], pushed: dict[str, str]) -> tuple[dict | None, str]:
-    """选片主逻辑：场景为候选单位，推的是场景封面。返回 (照片, 选择原因)。"""
-    day = resolve_day(target, pool, pushed)
+def select(db_path: Path, target: date, count: int = DAILY_COUNT) -> list[tuple[dict, str]]:
+    """选出 count 张照片：都来自同一个「历史上的今天」，随机挑。
+    CLI 和 app.py 服务内定时共用。"""
+    pool, _ = load_pool(db_path)
+    if not pool:
+        return []
+    day = resolve_day(target, pool)
     if day is None:
-        fallback = [p for p in pool if p["memory"] >= MEMORY_THRESHOLD] or pool
-        if not fallback:
-            return None, "全库没有带拍摄日期的照片"
-        top = sorted(fallback, key=lambda p: p["memory"], reverse=True)[:10]
-        photo, how = pick_one(top, pushed)
-        return photo, f"近一年没有达标场景，全库兜底（前 {len(top)} 高分里{how}）"
+        top = sorted(pool, key=lambda p: p["memory"], reverse=True)[:10]
+        return [(random.choice(top),
+                 f"近一年没有达标照片，全库高分兜底（前 {len(top)} 名里随机）")]
+    cands = day_candidates(day, pool)
     offset = (target - day).days
     when = "历史上的今天" if offset == 0 else f"历史上的今天（回退 {offset} 天）"
-    scenes = day_scenes(day, pool)
-    fresh = [s for s in scenes if not scene_recalled(s, pushed)]
-    if fresh:
-        scene = random.choice(fresh)
-        how = "没回忆过的场景里随机挑"
-    else:
-        scene = min(scenes, key=lambda s: scene_last_recall(s, pushed))
-        how = "场景都回忆过了，挑最久没回忆的"
-    return scene["cover"], f"{when}，{how}"
-
-
-def already_pushed_today(db_path: Path, target: date) -> bool:
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.execute(dot_push.PUSH_TABLE_SQL)
-        n = conn.execute(
-            "SELECT COUNT(*) FROM push_history WHERE pushed_at LIKE ?",
-            (f"{target.isoformat()}%",),
-        ).fetchone()[0]
-        return n > 0
-    finally:
-        conn.close()
-
-
-def select(db_path: Path, target: date, count: int = DAILY_COUNT) -> list[tuple[dict, str]]:
-    """选出 count 个场景（推各场景封面）：同场景不重复。CLI 和 app.py 服务内定时共用。"""
-    pool, _ = load_pool(db_path)
-    pushed = load_pushed(db_path)
-    picks: list[tuple[dict, str]] = []
-    for _ in range(count):
-        photo, why = pick(target, pool, pushed)
-        if photo is None:
-            break
-        picks.append((photo, why))
-        # 整个场景（同叠的全部成员）移出候选池，下一张换别的场景
-        if photo["stack"]:
-            pool = [p for p in pool if p["stack"] != photo["stack"]]
-        else:
-            pool = [p for p in pool if p["path"] != photo["path"]]
-    return picks
+    return [(p, f"{when}，随机挑的") for p in random.sample(cands, min(count, len(cands)))]
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="手动跑一次每日选片推送")
     ap.add_argument("--dry-run", action="store_true", help="只显示选片结果，不真推送")
     ap.add_argument("--date", help="模拟指定日期（YYYY-MM-DD），默认今天")
-    ap.add_argument("--force", action="store_true", help="今天已推送过也再推一张")
     ap.add_argument("--db", help="指定数据库路径（默认读 config.py 的 DB_PATH）")
     args = ap.parse_args()
 
     target = date.fromisoformat(args.date) if args.date else date.today()
     db_path = Path(args.db).expanduser() if args.db else dot_push.DB_PATH
     if args.db:
-        dot_push.DB_PATH = db_path.resolve()  # 推送历史跟着库走
+        dot_push.DB_PATH = db_path.resolve()  # 推送成图跟着库走
 
     if not db_path.exists():
         log(f"错误：数据库不存在 {db_path}（先跑 analyze_photos.py，或 --db 指定）")
@@ -239,20 +157,16 @@ def main() -> int:
         log("错误：没有可用的照片，先跑 analyze_photos.py 分析一批。")
         return 1
 
-    if already_pushed_today(db_path, target) and not args.force and not args.date:
-        log(f"{target.isoformat()} 已经推送过了，跳过（--force 可强制再推）。")
-        return 0
-
     if args.dry_run:
         log(f"[dry-run] 以下是 {target.isoformat()} 会推送的照片，不真推：")
     else:
         log(f"开始为 {target.isoformat()} 选片推送……")
 
-    ok = True
     picks = select(db_path, target)
     if not picks:
         log("错误：挑不出照片。")
         return 1
+    ok = True
     for i, (photo, why) in enumerate(picks, 1):
         name = Path(photo["path"]).name
         extra = "，".join(x for x in (photo["d"].isoformat(), photo["city"]) if x)

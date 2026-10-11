@@ -29,6 +29,12 @@ TIMEOUT = 600
 # 发 VLM 前把图片长边缩到该值（本地推理可保持 2560；云端建议 1280 省图片 token）
 VLM_MAX_LONG_EDGE = 2560
 
+# 相似分叠参数（只影响画廊聚合浏览，与推送无关）：相邻两张间隔 ≤ STACK_GAP_MIN 分钟
+# 且 dHash 汉明距离 ≤ STACK_HASH_MAX 才并入同一叠。改完跑
+# python3.11 analyze_photos.py --stacks 重算分叠
+STACK_GAP_MIN = 3
+STACK_HASH_MAX = 30
+
 # 离线中文城市索引（GPS → 城市名），相对路径基于仓库根
 WORLD_CITIES_CSV = "./data/world_cities_zh.csv"
 CITY_MAX_DISTANCE_KM = 80.0
@@ -56,10 +62,11 @@ DOT_TASK_ALIAS = "" # 可选：给这个内容起个人看得懂的名字，会�
 DOT_API_BASE = "https://dot.mindreset.tech"
 
 # —— 每日自动推送（定时器内置在 app.py 服务里；daily_push.py 是选片逻辑 + 手动入口）——
-# 选片：只在「历史上的今天」（月-日相同）里挑回忆分达到该值的照片，优先没推送过的；
-# 今天没有合适的就往前一天天回退，最多一年；再没有就用全库最高分兜底
+# 选片（与上游一致，纯随机、无推送记忆）：从今天往前找第一个有达标场景的月-日
+# （跨年，最多回退一年），在当天的场景里随机挑；推过的照片可能再次被选中。
+# 一年都没有达标场景，就用全库最高分兜底
 MEMORY_THRESHOLD = 70
-# 每天推几张（一块 Quote/0 屏建议 1）
+# 每天推几张（一块 Quote/0 屏建议 1；几张都来自同一个「历史上的今天」）
 DAILY_COUNT = 1
 # 控制台服务（app.py）常驻时，每天到点自动选片推送；不想要设 False
 AUTO_PUSH = True

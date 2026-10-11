@@ -70,7 +70,7 @@ function renderChips() {
   const allBtn = `<button class="chip-btn${!state.day && !state.types.length ? " active" : ""}" data-type="全部" title="清空所有筛选，看全部照片">全部</button>`;
   const dayBtn = resolvedDay
     ? `<button class="chip-btn chip-day${state.day ? " active" : ""}" data-chip="day"
-        title="${todayIsToday ? "只看历史上的今天" : "今天没达标场景，已按推送逻辑回退到这一天"}">今日选片${todayIsToday ? "" : " · " + resolvedDay.slice(5)} · ${todayCount}</button>`
+        title="${todayIsToday ? "只看历史上的今天" : "今天没有可推的场景，轮换到最近有可推场景的这一天"}">今日选片${todayIsToday ? "" : " · " + resolvedDay.slice(5)} · ${todayCount}</button>`
     : "";
   const typeBtns = typeList.filter((t) => t !== "全部").map((t) => {
     const active = state.types.includes(t);
@@ -554,27 +554,11 @@ function selectPhoto(p, { scroll = false, flash = true } = {}) {
     el.classList.toggle("selected", el.dataset.path === p.path);
   });
   $("#captionInput").value = captionOverrides.get(p.path) ?? p.caption;
-  $("#panelInfo").innerHTML = `回忆度 ${p.memory} · 美观度 ${p.beauty}<span class="push-history mono" id="pushHistory"></span>`;
-  loadPushHistory(p.path);
+  $("#panelInfo").innerHTML = `回忆度 ${p.memory} · 美观度 ${p.beauty}`;
   $("#pushBtn").disabled = false;
   refreshPreview({ flash });
   if (scroll && window.innerWidth <= 960) {
     $(".preview-col").scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-}
-
-async function loadPushHistory(path) {
-  const el = $("#pushHistory");
-  if (!el) return;
-  el.textContent = "查询推送记录…";
-  try {
-    const info = await fetch(`/api/pushinfo?path=${encodeURIComponent(path)}`).then((r) => r.json());
-    if (!current || current.path !== path) return;   // 期间已切换照片
-    el.textContent = info.count
-      ? `已推送 ${info.count} 次 · 最近 ${info.last}`
-      : "未推送过";
-  } catch {
-    el.textContent = "";
   }
 }
 

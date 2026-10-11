@@ -2,7 +2,7 @@
 
 English · [中文](README.zh-CN.md)
 
-A small tool that runs entirely on your own computer: AI reads your photo library, picks the scene most worth revisiting each day, writes a one-line caption for it, and pushes it to the e-ink display on your desk. Tap the display with your phone to see the original photo and its story.
+A small tool that runs entirely on your own computer: AI reads your photo library, and every morning resurfaces a photo from this day in years past with a one-line caption written for it, pushing it to the e-ink display on your desk. Tap the display with your phone to see the original photo and its story.
 
 <p align="center">
   <img src="docs/home.png" width="100%" alt="The workbench"/>
@@ -11,10 +11,10 @@ A small tool that runs entirely on your own computer: AI reads your photo librar
 
 ## What it does
 
-- **A memory a day** — every photo gets a 0–100 "memory score"; each morning the service picks the best not-yet-recalled scene from "on this day" in your library, walking back day by day when needed
+- **A memory a day** — every photo gets a 0–100 "memory score"; each morning a random qualifying photo from "on this day" goes on the display — pure chance, upstream-style, no memory of past pushes
 - **Writes the caption** — an 8–20 character line of narration for the photo, explicitly prompted to avoid clichés and empty sentiment
-- **Pushes on schedule or on demand** — the resident service pushes at a set time every day; in the console you can push any photo with one click; every push is recorded
-- **Groups similar shots** — bursts and same-scene variants stack into one scene (dHash fingerprint + time clustering); you pick each stack's cover, pushes show the cover
+- **Pushes on schedule or on demand** — the resident service pushes at a set time every day; in the console you can push any photo with one click
+- **Auto-stacks your bursts** — similar shots collapse into one deck in the gallery (dHash fingerprint + time clustering): fifteen near-identical frames take one card slot. Open a deck to flip through it like playing cards — drag or arrow keys — and promote the best shot to cover. Purely a browsing feature; pushes are per-photo and ignore stacks
 - **Tap to recall** — touch a phone to the display and a page opens with the original photo, its caption, date and city
 - **Private by design** — photos and the database stay on your machine; pick a local model and they never touch the cloud
 
@@ -58,7 +58,7 @@ python3.11 app.py               # open the console: http://127.0.0.1:8788
                                 # while the service runs, it also auto-pushes daily (see below)
 ```
 
-In the console: photo gallery on the left, live display preview on the right — click "Push to device" on anything you like, and edit the on-screen caption in place.
+In the console: photo gallery on the left, live display preview on the right — click "Push to device" on anything you like, and edit the on-screen caption in place. Bursts are auto-stacked into decks: open one, flip through with drag or arrow keys, and set the shot you like as its cover.
 
 > **Tip: trial it on a handful of photos first**
 > Pick a dozen or so photos, copy them to a new folder (say `test-photos` on your Desktop), and analyze just that batch:
@@ -91,7 +91,7 @@ Note: tap-to-view links point at this computer's LAN IP (port 8788), recorded at
 
 ### Daily automatic push (optional)
 
-The scheduler lives inside the console service: while `app.py` is running it picks a scene from "on this day" and pushes it at a set time — no launchd / crontab needed. Default is 08:00 daily; to change the time or switch auto-push off, add to `config.py`:
+The scheduler lives inside the console service: while `app.py` is running it picks a photo from "on this day" and pushes it at a set time — no launchd / crontab needed. Default is 08:00 daily; to change the time or switch auto-push off, add to `config.py`:
 
 ```python
 AUTO_PUSH = False    # turn off automatic pushes
@@ -107,11 +107,11 @@ python3.11 daily_push.py             # push now (skips if today already pushed; 
 python3.11 daily_push.py --date 2024-10-01 --dry-run   # rehearse another day
 ```
 
-How picks are made, briefly: candidates work in **scenes** — a stack of similar photos counts as one scene, a lone photo is its own. The picker first looks for a qualifying scene you haven't recalled yet on this calendar day across the years (walking back one day at a time, up to a year), then falls back to the least-recently-recalled scene, and finally to the library's top-scored photos. Tune the bar with `MEMORY_THRESHOLD` and the number of photos per day with `DAILY_COUNT`. The full rules live in [docs/photo-selection.md](docs/photo-selection.md) (Chinese).
+How picks are made, briefly — same as the upstream project, pure chance with no memory. Starting from today and walking back one day at a time for up to a year, the first calendar date that has a qualifying photo wins, and the pick is a random photo from that day; if a whole year has nothing, the library's top-scored photos step in. Past pushes are neither recorded nor excluded — on a sparse day the same photo may come back tomorrow, by design. Tune the bar with `MEMORY_THRESHOLD` and the photos-per-day with `DAILY_COUNT`. The full rules live in [docs/photo-selection.md](docs/photo-selection.md) (Chinese).
 
 ## Project docs
 
-- [docs/photo-selection.md](docs/photo-selection.md) — scene stacking and daily-pick rules in full (Chinese)
+- [docs/photo-selection.md](docs/photo-selection.md) — gallery stacking and daily-pick rules in full (Chinese)
 - [docs/CHANGELOG.md](docs/CHANGELOG.md) — release history (Chinese)
 
 ## Acknowledgments
