@@ -1,125 +1,143 @@
-# InkTime · An e-ink photo frame that tells stories
+# InkTime · 会讲故事的墨水屏相框
 
-English · [中文](README.zh-CN.md)
+中文 · [English](README.en.md)
 
-A small tool that runs entirely on your own computer: AI reads your photo library, and every morning resurfaces a photo from this day in years past with a one-line caption written for it, pushing it to the e-ink display on your desk. Tap the display with your phone to see the original photo and its story.
+一个完全运行在自己电脑上的小工具：它会用 AI 读懂你的照片，每天早上从「历史上的今天」
+翻出一张老照片，配上一句画外之意，推送到桌上的墨水屏相框；手机碰一碰设备，就能看到
+那张照片的原图和故事。
 
 <p align="center">
-  <img src="docs/home.png" width="100%" alt="The workbench"/>
+  <img src="docs/home.png" width="100%" alt="工作台"/>
 </p>
-<p align="center"><i>The workbench: gallery / on-screen caption editing / live e-ink preview</i></p>
+<p align="center"><i>工作台：画廊筛选 / 屏上文案即时编辑 / 墨水屏实时预览</i></p>
 
-## What it does
+## 它能做什么
 
-- **A memory a day** — every photo gets a 0–100 "memory score"; each morning a random qualifying photo from "on this day" goes on the display — pure chance, upstream-style, no memory of past pushes
-- **Writes the caption** — an 8–20 character line of narration for the photo, explicitly prompted to avoid clichés and empty sentiment
-- **Pushes on schedule or on demand** — the resident service pushes at a set time every day; in the console you can push any photo with one click
-- **Auto-stacks your bursts** — similar shots collapse into one deck in the gallery (dHash fingerprint + time clustering): fifteen near-identical frames take one card slot. Open a deck to flip through it like playing cards — drag or arrow keys — and promote the best shot to cover. Purely a browsing feature; pushes are per-photo and ignore stacks
-- **Tap to recall** — touch a phone to the display and a page opens with the original photo, its caption, date and city
-- **Private by design** — photos and the database stay on your machine; pick a local model and they never touch the cloud
+- **每天一个回忆**：AI 给每张照片打 0~100 的「回忆分」，每天早上从「历史上的今天」随机挑一张过线的照片上屏——纯随机、上游同款，不记得推过什么，重复了就当重温
+- **自动写文案**：为照片配一句 8~20 字的旁白，明令不走套路、不灌鸡汤
+- **定时+一键推送**：服务常驻时每天定点自动推，控制台里也可以想推哪张点哪张
+- **连拍自动成叠**：相似照片在画廊里聚成一叠卡牌（dHash 指纹 + 时间聚类），十五张连拍只占一个卡片位；点开像翻扑克牌一样翻阅——拖动或 ←/→——翻到好的设为封面。纯浏览功能，推送按单张随机、与分叠无关
+- **碰一碰回看**：手机 NFC 触碰设备，打开一个页面看原图、文案、拍摄日期和城市
+- **隐私可控**：照片和数据库都存在自己电脑上；选本地模型的话，照片不会经过任何云端
 
-## Quick start
+## 三步开始
 
-Just want to look first? After the install in Step 1, `python3 mock/seed_mock.py` generates a batch of demo photos and their database, and `python3 app.py` serves the full console at http://127.0.0.1:8788 — no AI key, no photos of your own, no display needed.
+只想先看看效果？做完第 1 步的安装后，`python3 mock/seed_mock.py` 会生成一批演示照片和数据库，
+随后 `python3 app.py` 打开完整控制台：http://127.0.0.1:8788 —— 不用 AI key、不用自己的照片、也不用设备。
 
-### Step 1 · Install (once)
+### 第 1 步：安装（只需一次）
 
-Paste these two commands into Terminal (macOS) or PowerShell (Windows):
+把下面两行命令复制粘贴到「终端」（macOS）或「PowerShell」（Windows）里：
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate    # Windows users: .venv\Scripts\activate
+python3 -m venv .venv && source .venv/bin/activate    # Windows 用户改为：.venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Recommended alongside: [exiftool](https://exiftool.org/), which turns photo GPS data into city names. Without it everything still works, just without locations.
+建议顺手装上 [exiftool](https://exiftool.org/)，它负责把照片 GPS 解析成城市名。不装也能用，只是没有地点。
 
 ```bash
 brew install exiftool    # Windows: choco install exiftool · Debian/Ubuntu: sudo apt-get install libimage-exiftool-perl
 ```
 
-### Step 2 · Tell it where your photos are and which AI to use
+### 第 2 步：告诉它照片在哪、用哪个 AI
 
-Copy `config_example.py` to `config.py` and fill in three things (all commented in Chinese):
+复制 `config_example.py` 并改名为 `config.py`，打开填三样东西（都有中文注释）：
 
-1. **Where your photos are**: `IMAGE_DIR`, e.g. `/Users/you/Pictures/MyPhotos`
-2. **Where results go**: `DB_PATH`, the file holding analysis results — putting it in the photo folder is fine, named `photos.db`
-   (joined with the above: `/Users/you/Pictures/MyPhotos/photos.db`)
-3. **Which AI**: any OpenAI-compatible `/v1/chat/completions` vision endpoint. The main difference is privacy —
-   - **Commercial API**: photos are uploaded to the model provider's servers for analysis. Buy a vision-model key (Zhipu, Aliyun, etc.), then fill `api_url`, `api_key`, and a multimodal `model_name` (e.g. `glm-4.5v`)
-   - **Local model**: photos never leave your computer. Install [LM Studio](https://lmstudio.ai), download a vision model (e.g. `mlx-community/Qwen3.5-9B-6bit`, ~8 GB) and start the server on the Developer page; set `api_url` to `http://127.0.0.1:1234/v1/chat/completions` and leave `api_key` empty. Demands a beefy machine: the author measured ~2 minutes per photo (two model calls) on an M2 Pro with 16 GB
+1. **照片在哪**：`IMAGE_DIR` 填你照片文件夹的路径，例如 `/Users/张三/Pictures/我的照片`
+2. **结果存哪**：`DB_PATH` 是分析结果的保存文件，放在照片文件夹里就行，命名为 `photos.db`
+   （和上面拼起来就是：`/Users/张三/Pictures/我的照片/photos.db`）
+3. **AI 用哪家**：任何 OpenAI 兼容的 `/v1/chat/completions` 视觉端点都行，区别主要在隐私——
+   - **商用 API**：照片会上传到模型服务商的服务器分析。买一份视觉大模型的 key（阿里云/智谱等），
+     填 `api_url`、`api_key`，`model_name` 填多模态模型名（如 `glm-4.5v`）
+   - **自建模型**：照片完全不出你的电脑。装 [LM Studio](https://lmstudio.ai)，下载视觉模型
+     （如 `mlx-community/Qwen3.5-9B-6bit`，约 8GB）并在 Developer 页启动本地服务；`api_url` 填
+     `http://127.0.0.1:1234/v1/chat/completions`，`api_key` 留空。对电脑性能要求较高：
+     作者实测 M2 Pro / 16GB 内存，每张照片（两次调用）约 2 分钟
 
-`API_CHANNELS` is a list in priority order — when a channel fails or rate-limits, the next one is tried automatically.
+`API_CHANNELS` 是按优先级排列的列表——某个渠道失败或限流时，会自动切到下一个。
 
-### Step 3 · Run
+### 第 3 步：跑起来
 
 ```bash
-python3.11 analyze_photos.py    # analyze the library: slow the first time; interrupted runs resume where they left off
-python3.11 app.py               # open the console: http://127.0.0.1:8788
-                                # while the service runs, it also auto-pushes daily (see below)
+python3.11 analyze_photos.py    # 分析照片：第一次要等一会儿，中断了再跑会自动接续
+python3.11 app.py               # 打开控制台：http://127.0.0.1:8788
+                                # 服务常驻期间，每天到点还会自动推送（见下文「每天自动推送」）
 ```
 
-In the console: photo gallery on the left, live display preview on the right — click "Push to device" on anything you like, and edit the on-screen caption in place. Bursts are auto-stacked into decks: open one, flip through with drag or arrow keys, and set the shot you like as its cover.
+控制台里：左边是照片画廊，右边是墨水屏预览，点「推送到设备」即可。
+想推哪张点哪张，屏上文案也可以随手改。连拍会自动叠成一叠：
+点开拖一拖或按 ←/→ 翻牌，挑一张顺眼的设为这叠的封面。
 
-> **Tip: trial it on a handful of photos first**
-> Pick a dozen or so photos, copy them to a new folder (say `test-photos` on your Desktop), and analyze just that batch:
+> **小技巧：先拿几张照片试水**
+> 从照片库里挑十来张，拷到一个新文件夹（比如桌面上的 `测试照片`），只分析这一小批：
 >
 > ```bash
-> python3.11 analyze_photos.py ~/Desktop/test-photos          # only this folder
-> python3.11 analyze_photos.py ~/Desktop/test-photos --limit 5  # even cheaper: first 5 photos only
+> python3.11 analyze_photos.py ~/Desktop/测试照片          # 只分析这个文件夹
+> python3.11 analyze_photos.py ~/Desktop/测试照片 --limit 5  # 再省一点：只处理前 5 张
 > ```
 >
-> Open the console, like what you see, then hand it the whole library.
+> 跑完打开控制台看看效果，满意了再把整个照片库交给它。
 
-### Getting pushes onto the display
+### 让墨水屏收到推送
 
-You need a [Dot. Quote/0](https://dot.mindreset.tech) e-ink display, and its credentials in `config.py` (find them in the Dot. App):
+需要一个 [Dot. Quote/0](https://dot.mindreset.tech) 墨水屏，并在 `config.py` 里填上设备凭证（App 里可以查到）：
 
 ```python
-DOT_API_KEY = "dot_app_XXXX"    # Dot. App → More → API Key → Create
-DOT_DEVICE_ID = "device serial number"
+DOT_API_KEY = "dot_app_XXXX"    # Dot. App → 更多 → API Key → 创建
+DOT_DEVICE_ID = "设备序列号"
 ```
 
-Two optional settings (everything works without them): `DOT_TASK_KEY` selects which "Image API" content item to push to when the device has several; `DOT_TASK_ALIAS` gives the content a readable name in the Dot. App's task list.
+另有两个可选项（都不填也能用）：`DOT_TASK_KEY` 在设备上有多个「图像 API」内容时指定推给哪个；
+`DOT_TASK_ALIAS` 给内容起个看得懂的显示名，会出现在 Dot. App 的任务列表里。
 
-| Quote/0 in the flesh | Tap-to-view on a phone |
+| Quote/0 实机 | 碰一碰手机端 |
 |:---:|:---:|
 | <img src="docs/device_real.jpg" width="480"/> | <img src="docs/tap_mobile.png" width="213"/> |
 
-*Left: a Quote/0 showing the pushed photo and its caption; right: the recall page opened by tapping the phone on the display*
+*左：Quote/0 实机正在展示推送的照片与画外之意；右：手机 NFC 碰一碰打开的回看页面*
 
-Note: tap-to-view links point at this computer's LAN IP (port 8788), recorded at push time — the phone must be on the same network, and old links stop working if the computer's IP changes.
+注意：碰一碰链接指向这台电脑的局域网 IP（8788 端口），推送那一刻写定——手机要和电脑在同一网络，
+电脑 IP 变了旧链接也会失效。
 
-### Daily automatic push (optional)
+### 每天自动推送（可选）
 
-The scheduler lives inside the console service: while `app.py` is running it picks a photo from "on this day" and pushes it at a set time — no launchd / crontab needed. Default is 08:00 daily; to change the time or switch auto-push off, add to `config.py`:
+定时器就长在控制台服务里：`app.py` 常驻时，每天到点自动从「历史上的今天」挑一张照片推到屏上，
+不需要 launchd / crontab。默认每天 08:00，想改时间或不想要自动推送，在 `config.py` 里加：
 
 ```python
-AUTO_PUSH = False    # turn off automatic pushes
-PUSH_HOUR = 8        # hour of day to push (24-hour clock)
+AUTO_PUSH = False    # 关掉自动推送
+PUSH_HOUR = 8        # 每天几点推（24 小时制）
 PUSH_MINUTE = 0
 ```
 
-If the Mac was asleep at the appointed time, the push happens right after wake-up; failed pushes retry automatically after 10 minutes. A scheduled push does not force a screen refresh: the image is stored on the device and appears at the display's own next wake cycle (saves power, no surprises); pressing "Push to device" in the console refreshes immediately. To preview what today's push would pick:
+Mac 睡眠错过了点，服务会在唤醒后补推；推送失败会隔 10 分钟自动重试。定时推送不强制翻屏：
+照片先存进设备，等墨水屏自己的唤醒周期再把内容刷出来（省电、不吵）；控制台里手动点
+「推送到设备」则是立刻刷新。推送前想先看看今天会选中哪张：
 
 ```bash
-python3.11 daily_push.py --dry-run   # show the pick, don't push
-python3.11 daily_push.py             # push now (skips if today already pushed; --force overrides)
-python3.11 daily_push.py --date 2024-10-01 --dry-run   # rehearse another day
+python3.11 daily_push.py --dry-run   # 只显示选片结果，不真推
+python3.11 daily_push.py             # 手动立即推一次（今天推过会跳过，--force 强制再推）
+python3.11 daily_push.py --date 2024-10-01 --dry-run   # 预演别的日子
 ```
 
-How picks are made, briefly — same as the upstream project, pure chance with no memory. Starting from today and walking back one day at a time for up to a year, the first calendar date that has a qualifying photo wins, and the pick is a random photo from that day; if a whole year has nothing, the library's top-scored photos step in. Past pushes are neither recorded nor excluded — on a sparse day the same photo may come back tomorrow, by design. Tune the bar with `MEMORY_THRESHOLD` and the photos-per-day with `DAILY_COUNT`. The full rules live in [docs/photo-selection.md](docs/photo-selection.md) (Chinese).
+选片规则一句话版（与上游一致，单张、纯随机、无推送记忆）：从今天往前找第一个有达标
+照片的日子（月-日跨年匹配，最多回退一年），在当天的达标照片里随机挑；一年都没有就
+用全库最高分兜底。推过的照片随时可能再次被选中——照片少的日子重复了就当重温。
+相似分叠只用于画廊浏览，与推送无关。达标线用 `MEMORY_THRESHOLD` 调，每天张数用
+`DAILY_COUNT` 调。完整规则见 [docs/photo-selection.md](docs/photo-selection.md)。
 
-## Project docs
+## 项目文档
 
-- [docs/photo-selection.md](docs/photo-selection.md) — gallery stacking and daily-pick rules in full (Chinese)
-- [docs/CHANGELOG.md](docs/CHANGELOG.md) — release history (Chinese)
+- [docs/photo-selection.md](docs/photo-selection.md) — 分叠与选片的完整规则
+- [docs/CHANGELOG.md](docs/CHANGELOG.md) — 更新日志
 
-## Acknowledgments
+## 致谢
 
-- [dai-hongtao/InkTime](https://github.com/dai-hongtao/InkTime) — the project idea and photo-analysis approach
-- [Dot.](https://dot.mindreset.tech) — the Quote/0 e-ink display and its OpenAPI
-- [ZinggJM/GxEPD2](https://github.com/ZinggJM/GxEPD2), [Pillow](https://python-pillow.org/) — the e-ink ecosystem and image processing
-- The city index is built on [GeoNames](https://www.geonames.org/) (CC BY 4.0); the visual language borrows from [dejev.app](https://dejev.app/zh-Hans)
+- [dai-hongtao/InkTime](https://github.com/dai-hongtao/InkTime) — 项目想法与照片分析思路
+- [Dot.](https://dot.mindreset.tech) — Quote/0 墨水屏设备与 OpenAPI
+- [ZinggJM/GxEPD2](https://github.com/ZinggJM/GxEPD2)、[Pillow](https://python-pillow.org/) — 墨水屏生态与图像处理
+- 城市索引基于 [GeoNames](https://www.geonames.org/)（CC BY 4.0）制作；视觉语言取自 [dejev.app](https://dejev.app/zh-Hans)
 
 ## License
 
